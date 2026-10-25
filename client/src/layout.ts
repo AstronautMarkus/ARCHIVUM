@@ -5,8 +5,6 @@
 export const TILE = 2
 export const WALL_H = 3
 export const DOOR_H = 2.2
-export const FACADE_H = 7
-export const HOUSE_H = 5
 export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE }
 const ROOM_W = 5
 const OUT_W = 10, STREET_W = 5, PLAZA_Z0 = -5, PLAZA_Z1 = 7

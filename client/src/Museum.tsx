@@ -1,9 +1,9 @@
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { Fragment, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  buildFloor, tileAt, DOOR_H, FACADE_H, HOUSE_H, SPAWN, STREET_X, TILE, WALL_H, type Layout, type Prop, type Slot,
+  buildFloor, tileAt, DOOR_H, SPAWN, STREET_X, TILE, WALL_H, type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, type Exhibit, type Floor, type Museum } from './api'
 
@@ -11,6 +11,11 @@ const EYE = 1.6
 const GOLD = '#ffcc33'
 const HAZE = '#9fd0f5' // sky at the horizon; outdoor fog fades into it
 const HAZE_COLOR = new THREE.Color(HAZE), DARK = new THREE.Color('#000')
+const STOREY = 3.5 // one floor seen from outside: 3 m of room plus the slab
+// storeys of the city buildings around the street, changing every three tiles
+const CITY = [3, 4, 2, 5, 3]
+const buildingHeight = (tx: number, tz: number) => CITY[((Math.floor((tx + tz) / 3) % 5) + 5) % 5] * STOREY + 0.5
+const odd = ([tx, tz]: [number, number]) => ((tx + tz) % 2 + 2) % 2 === 1 // which wall tiles get a window
 const tmp = new THREE.Vector3()
 
 function retro(t: THREE.Texture, repeat = false) {
@@ -43,7 +48,7 @@ export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, on
       <primitive attach="background" object={sky} />
       <fog attach="fog" args={['#000', 3, 24]} />
       <Suspense fallback={null}>
-        <World layout={layout} byRoom={byRoom} quiet={quiet} />
+        <World layout={layout} byRoom={byRoom} quiet={quiet} storeys={museum.floors.length} />
         <Avatars floorId={floor.id} token={token} onChanged={onChanged} onChat={onChat} say={say} />
       </Suspense>
       <Player layout={layout} floorId={floor.id} onElevator={onElevator} onPick={onPick} />
@@ -52,31 +57,50 @@ export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, on
   )
 }
 
-// pixel-art day sky as an equirectangular background: blue gradient with chunky clouds
+// pixel-art city sky as an equirectangular background: blue gradient, clouds, and a skyline with lit windows
 function makeSky() {
+  const W = 1024, H = 512, horizon = H / 2
   const c = document.createElement('canvas')
-  c.width = 512
-  c.height = 256
+  c.width = W
+  c.height = H
   const g = c.getContext('2d')!
-  const grad = g.createLinearGradient(0, 0, 0, 128) // zenith to horizon
+  const grad = g.createLinearGradient(0, 0, 0, horizon) // zenith to horizon
   grad.addColorStop(0, '#1b4aa0')
   grad.addColorStop(1, HAZE)
   g.fillStyle = grad
-  g.fillRect(0, 0, 512, 128)
-  g.fillStyle = HAZE
-  g.fillRect(0, 128, 512, 128)
+  g.fillRect(0, 0, W, horizon)
+  g.fillStyle = '#3c4656'
+  g.fillRect(0, horizon, W, H - horizon)
   let seed = 7
-  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647 // fixed seed: everyone sees the same clouds
-  for (let i = 0; i < 24; i++) {
-    const x = rand() * 512, y = 40 + rand() * 70, r = 3 + rand() * 6
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647 // fixed seed: everyone sees the same city
+  for (let i = 0; i < 30; i++) {
+    const x = rand() * W, y = 50 + rand() * 100, r = 5 + rand() * 10
     for (let k = 0; k < 7; k++) {
       const bx = x + (rand() - 0.5) * r * 5, by = y + (rand() - 0.5) * r
       g.fillStyle = k < 2 ? '#d5e6f5' : '#ffffff'
-      for (const wrap of [-512, 0, 512]) {
+      for (const wrap of [-W, 0, W]) {
         g.beginPath()
         g.ellipse(bx + wrap, by, r * 1.8, r, 0, 0, Math.PI * 2)
         g.fill()
       }
+    }
+  }
+  // two rows of towers on the horizon: hazy ones far away, darker ones in front with windows
+  const rows = [['#8aa6c1', 40, 120, 0], ['#56677d', 25, 150, 0.3]] as const
+  for (const [color, minH, maxH, lit] of rows) {
+    for (let x = 0; x < W;) {
+      const w = 14 + rand() * 30, h = minH + rand() * (maxH - minH)
+      g.fillStyle = color
+      g.fillRect(x, horizon - h, w, h)
+      if (lit) {
+        for (let wy = horizon - h + 4; wy < horizon - 4; wy += 6) {
+          for (let wx = x + 3; wx < x + w - 4; wx += 5) {
+            g.fillStyle = rand() < lit ? '#ffd66b' : '#46566b'
+            g.fillRect(wx, wy, 2, 3)
+          }
+        }
+      }
+      x += w + rand() * 6
     }
   }
   const t = new THREE.CanvasTexture(c)
@@ -85,17 +109,41 @@ function makeSky() {
   return t
 }
 
+// the wall texture with a window painted on: one per tile and storey, kept clear of the cell's bottom quarter
+// so a short top band (parapet) shows plain wall
+function withWindow(tex: THREE.Texture) {
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')!
+  g.drawImage(tex.image as HTMLImageElement, 0, 0, 128, 128)
+  g.fillStyle = '#2b2b30'
+  g.fillRect(34, 24, 60, 70)
+  const glass = g.createLinearGradient(0, 28, 0, 90)
+  glass.addColorStop(0, '#9fc3e6')
+  glass.addColorStop(1, '#2d4f7a')
+  g.fillStyle = glass
+  g.fillRect(38, 28, 52, 62)
+  g.fillStyle = '#2b2b30'
+  g.fillRect(62, 28, 4, 62)
+  g.fillRect(38, 56, 52, 4)
+  return new THREE.CanvasTexture(c)
+}
+
 type Cell = [number, number]
 
-function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, Exhibit[]>; quiet: boolean }) {
+function World({ layout, byRoom, quiet, storeys }: {
+  layout: Layout; byRoom: Map<string, Exhibit[]>; quiet: boolean; storeys: number
+}) {
   const [wall, floor, ceil, lite, facade, house, street, sidewalk, door] = useTexture([
     '/doom/bigwall.png', '/doom/floor0_1.png', '/doom/ceil3_5.png', '/doom/tlite6_1.png',
     '/doom/stonew5.png', '/doom/pbrick8.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
   ])
   useMemo(() => retro(lite), [lite])
+  const [facadeWin, brickWin] = useMemo(() => [withWindow(facade), withWindow(house)], [facade, house])
+  const top = storeys * STOREY + 0.9 // the museum is as tall as its floors, plus a parapet
 
-  // walls touching the outside are house fronts, or the museum facade on the building's west face (x = 0)
-  const { inner, front, houses, doors } = useMemo(() => {
+  // walls touching the outside are city buildings, or the museum facade on the building's west face (x = 0)
+  const { inner, front, upper, city, doors } = useMemo(() => {
     const inner: Cell[] = [], front: Cell[] = [], houses: Cell[] = [], doors: Cell[] = []
     const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
     layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
@@ -106,7 +154,12 @@ function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, 
       if (near.includes('o')) (tx === 0 ? front : houses).push([tx, tz])
       else if (near.some((n) => n !== '#')) inner.push([tx, tz])
     }))
-    return { inner, front, houses, doors }
+    // upper floors run over the front door too; only every other tile gets a window
+    const above = [...front, ...doors.filter(([tx]) => tx === 0)]
+    const upper = { win: above.filter(odd), plain: above.filter((c) => !odd(c)) }
+    const city = [...Map.groupBy(houses, ([tx, tz]) => buildingHeight(tx, tz))]
+      .map(([h, cells]) => ({ h, win: cells.filter(odd), plain: cells.filter((c) => !odd(c)) }))
+    return { inner, front, upper, city, doors }
   }, [layout])
 
   const z0 = layout.z0 * TILE, z1 = (layout.z0 + layout.rows.length) * TILE
@@ -115,8 +168,15 @@ function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, 
     <>
       <group name="walls">
         <WallSet cells={inner} tex={wall} height={WALL_H} />
-        <WallSet cells={front} tex={facade} height={FACADE_H} />
-        <WallSet cells={houses} tex={house} height={HOUSE_H} />
+        <WallSet cells={front} tex={facade} height={STOREY} every={STOREY} />
+        <WallSet cells={upper.win} tex={facadeWin} base={STOREY} height={top - STOREY} every={STOREY} />
+        <WallSet cells={upper.plain} tex={facade} base={STOREY} height={top - STOREY} every={STOREY} />
+        {city.map(({ h, win, plain }) => (
+          <Fragment key={h}>
+            <WallSet cells={win} tex={brickWin} height={h} every={STOREY} />
+            <WallSet cells={plain} tex={house} height={h} every={STOREY} />
+          </Fragment>
+        ))}
       </group>
       <Ground x={[0, end]} z={[z0, z1]} tex={floor} />
       <Ground x={[0, end]} z={[z0, z1]} tex={ceil} y={WALL_H} />
@@ -124,14 +184,14 @@ function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, 
         <>
           <Ground x={[layout.x0 * TILE, STREET_X]} z={[z0, z1]} tex={street} size={[2 * TILE, TILE]} />
           <Ground x={[STREET_X, 0]} z={[z0, z1]} tex={sidewalk} />
-          <Text position={[-0.05, 5, 1.5 * TILE]} rotation-y={-Math.PI / 2} fontSize={1} color={GOLD}
+          <Text position={[-0.05, (DOOR_H + STOREY) / 2, 1.5 * TILE]} rotation-y={-Math.PI / 2} fontSize={0.9} color={GOLD}
             outlineWidth={0.04} outlineColor="#3a2a14">ARCHIVUM</Text>
           <Props props={layout.props} />
           <FrontDoor tex={door} />
         </>
       )}
       {doors.map(([tx, tz]) => tx === 0
-        ? <Lintel key="front" tx={tx} tz={tz} tex={facade} top={FACADE_H} />
+        ? <Lintel key="front" tx={tx} tz={tz} tex={facade} top={STOREY} />
         : <Lintel key={`${tx},${tz}`} tx={tx} tz={tz} tex={wall} top={WALL_H} />)}
       <mesh rotation-x={-Math.PI / 2} position={[1.5 * TILE, 0.01, 0.5 * TILE]}>
         <planeGeometry args={[TILE, TILE]} />
@@ -155,21 +215,23 @@ function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, 
   )
 }
 
-// one instanced box per wall tile; the texture repeats once per tile across and every TILE meters up
-function WallSet({ cells, tex, height }: { cells: Cell[]; tex: THREE.Texture; height: number }) {
+// one instanced box per wall tile, from y = base up; the texture repeats once per tile across and every `every` meters up
+function WallSet({ cells, tex, height, base = 0, every = TILE }: {
+  cells: Cell[]; tex: THREE.Texture; height: number; base?: number; every?: number
+}) {
   const ref = useRef<THREE.InstancedMesh>(null!)
   const map = useMemo(() => {
     const t = tex.clone()
     retro(t, true)
-    t.repeat.set(1, height / TILE)
+    t.repeat.set(1, height / every)
     return t
-  }, [tex, height])
+  }, [tex, height, every])
   useLayoutEffect(() => {
     const m = new THREE.Matrix4()
-    cells.forEach(([tx, tz], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, height / 2, (tz + 0.5) * TILE)))
+    cells.forEach(([tx, tz], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, base + height / 2, (tz + 0.5) * TILE)))
     ref.current.instanceMatrix.needsUpdate = true
     ref.current.computeBoundingSphere()
-  }, [cells, height])
+  }, [cells, height, base])
   return (
     <instancedMesh ref={ref} args={[undefined, undefined, cells.length]}>
       <boxGeometry args={[TILE, height, TILE]} />
@@ -247,12 +309,20 @@ function Props({ props }: { props: Prop[] }) {
   const art = { tree: useTexture('/doom/smita0.png'), lamp: useTexture('/doom/tlmpa0.png') }
   useMemo(() => { retro(art.tree); retro(art.lamp) }, [art.tree, art.lamp])
   const scale = { tree: 1.6, lamp: 1 } // trees a bit bigger than Doom size so they read as trees
+  // upright billboards like in Doom: they turn toward you around the vertical axis only, so looking down
+  // doesn't tilt them off the ground
+  const meshes = useRef<THREE.Mesh[]>([])
+  useFrame(({ camera }) => meshes.current.forEach((m) => {
+    m.rotation.y = Math.atan2(camera.position.x - m.position.x, camera.position.z - m.position.z)
+  }))
   return props.map((p, i) => {
     const img = art[p.kind].image as HTMLImageElement, s = PX * scale[p.kind]
     return (
-      <sprite key={i} position={[p.x, (img.height * s) / 2, p.z]} scale={[img.width * s, img.height * s, 1]}>
-        <spriteMaterial map={art[p.kind]} alphaTest={0.5} />
-      </sprite>
+      <mesh key={i} ref={(m) => { if (m) meshes.current[i] = m }}
+        position={[p.x, (img.height * s) / 2, p.z]} scale={[img.width * s, img.height * s, 1]}>
+        <planeGeometry />
+        <meshBasicMaterial map={art[p.kind]} alphaTest={0.5} />
+      </mesh>
     )
   })
 }
