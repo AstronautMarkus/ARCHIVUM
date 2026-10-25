@@ -1,0 +1,7 @@
+node_modules
+client/dist
+server/.venv
+server/uploads
+server/.secret
+__pycache__
+.DS_Store
