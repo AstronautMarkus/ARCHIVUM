@@ -25,8 +25,20 @@ function reachableAll(l: ReturnType<typeof buildFloor>) {
 test('empty floor has a corridor, elevator and walkable spawn', () => {
   const l = buildFloor([])
   assert.equal(tileAt(l, SPAWN.x, SPAWN.z), '.')
-  assert.equal(tileAt(l, 1.5 * TILE, 1.5 * TILE), 'E')
+  assert.equal(tileAt(l, 1.5 * TILE, 0.5 * TILE), 'E')
+  assert.deepEqual(l.start, SPAWN)
   assert.ok(reachableAll(l))
+})
+
+test('the ground floor opens onto a street through the front door', () => {
+  const inside = buildFloor(rooms([2, 3, 9]))
+  const l = buildFloor(rooms([2, 3, 9]), true)
+  assert.equal(tileAt(l, l.start.x, l.start.z), 'o')
+  assert.equal(tileAt(l, 1, 3), 'D')
+  assert.equal(tileAt(l, -0.1, 3), 'o')
+  assert.ok(reachableAll(l), 'street, sidewalk and every room connect through the door')
+  assert.deepEqual(l.rooms, inside.rooms, 'the outside does not move any room')
+  for (const p of l.props) assert.equal(tileAt(l, p.x, p.z), 'o')
 })
 
 test('each exhibit gets a slot on a wall facing an open tile', () => {

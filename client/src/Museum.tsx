@@ -2,11 +2,15 @@ import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
-import { buildFloor, tileAt, DOOR_H, SPAWN, TILE, WALL_H, type Layout, type Slot } from './layout'
+import {
+  buildFloor, tileAt, DOOR_H, FACADE_H, HOUSE_H, SPAWN, STREET_X, TILE, WALL_H, type Layout, type Prop, type Slot,
+} from './layout'
 import { fileUrl, type Exhibit, type Floor, type Museum } from './api'
 
 const EYE = 1.6
 const GOLD = '#ffcc33'
+const HAZE = '#9fd0f5' // sky at the horizon; outdoor fog fades into it
+const HAZE_COLOR = new THREE.Color(HAZE), DARK = new THREE.Color('#000')
 const tmp = new THREE.Vector3()
 
 function retro(t: THREE.Texture, repeat = false) {
@@ -26,15 +30,17 @@ export type Chat = { id: number; n: string; chat: string }
 export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, onLock, onChanged, onChat, say }: Props) {
   const rooms = museum.rooms.filter((r) => r.floor === floor.id)
   const byRoom = Map.groupBy(museum.exhibits, (e) => e.room)
-  const key = rooms.map((r) => `${r.id}:${r.title}:${byRoom.get(r.id)?.length ?? 0}`).join()
+  const ground = museum.floors[0]?.id === floor.id // only the ground floor opens onto the street
+  const key = floor.id + rooms.map((r) => `${r.id}:${r.title}:${byRoom.get(r.id)?.length ?? 0}`).join()
   const layout = useMemo(
-    () => buildFloor(rooms.map((r) => ({ id: r.id, title: r.title, count: byRoom.get(r.id)?.length ?? 0 }))),
-    [key],
+    () => buildFloor(rooms.map((r) => ({ id: r.id, title: r.title, count: byRoom.get(r.id)?.length ?? 0 })), ground),
+    [key, ground],
   )
+  const sky = useMemo(makeSky, [])
   return (
     // render at ~240 lines and let CSS scale it up with hard pixels
-    <Canvas flat dpr={Math.min(1, 240 / window.innerHeight)} camera={{ fov: 75, near: 0.05, far: 60 }}>
-      <color attach="background" args={['#000']} />
+    <Canvas flat dpr={Math.min(1, 240 / window.innerHeight)} camera={{ fov: 75, near: 0.05, far: 80 }}>
+      <primitive attach="background" object={sky} />
       <fog attach="fog" args={['#000', 3, 24]} />
       <Suspense fallback={null}>
         <World layout={layout} byRoom={byRoom} quiet={quiet} />
@@ -46,62 +52,92 @@ export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, on
   )
 }
 
-function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, Exhibit[]>; quiet: boolean }) {
-  const [wall, floor, ceil, lite] = useTexture(['/doom/bigwall.png', '/doom/floor0_1.png', '/doom/ceil3_5.png', '/doom/tlite6_1.png'])
-  const cols = layout.rows[0].length, rows = layout.rows.length
-  const [floorTex, ceilTex] = useMemo(() => [floor, ceil].map((t) => {
-    const c = t.clone()
-    retro(c, true)
-    c.repeat.set(cols, rows)
-    return c
-  }), [floor, ceil, cols, rows])
-  useMemo(() => { retro(wall, true); wall.repeat.set(1, WALL_H / TILE); retro(lite) }, [wall, lite])
+// pixel-art day sky as an equirectangular background: blue gradient with chunky clouds
+function makeSky() {
+  const c = document.createElement('canvas')
+  c.width = 512
+  c.height = 256
+  const g = c.getContext('2d')!
+  const grad = g.createLinearGradient(0, 0, 0, 128) // zenith to horizon
+  grad.addColorStop(0, '#1b4aa0')
+  grad.addColorStop(1, HAZE)
+  g.fillStyle = grad
+  g.fillRect(0, 0, 512, 128)
+  g.fillStyle = HAZE
+  g.fillRect(0, 128, 512, 128)
+  let seed = 7
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647 // fixed seed: everyone sees the same clouds
+  for (let i = 0; i < 24; i++) {
+    const x = rand() * 512, y = 40 + rand() * 70, r = 3 + rand() * 6
+    for (let k = 0; k < 7; k++) {
+      const bx = x + (rand() - 0.5) * r * 5, by = y + (rand() - 0.5) * r
+      g.fillStyle = k < 2 ? '#d5e6f5' : '#ffffff'
+      for (const wrap of [-512, 0, 512]) {
+        g.beginPath()
+        g.ellipse(bx + wrap, by, r * 1.8, r, 0, 0, Math.PI * 2)
+        g.fill()
+      }
+    }
+  }
+  const t = new THREE.CanvasTexture(c)
+  t.mapping = THREE.EquirectangularReflectionMapping
+  t.colorSpace = THREE.SRGBColorSpace
+  return t
+}
 
-  const { walls, doors } = useMemo(() => {
-    const walls: [number, number][] = [], doors: [number, number][] = []
-    const open = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE) !== '#'
-    layout.rows.forEach((row, i) => [...row].forEach((c, tx) => {
-      const tz = i + layout.z0
+type Cell = [number, number]
+
+function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, Exhibit[]>; quiet: boolean }) {
+  const [wall, floor, ceil, lite, facade, house, street, sidewalk, door] = useTexture([
+    '/doom/bigwall.png', '/doom/floor0_1.png', '/doom/ceil3_5.png', '/doom/tlite6_1.png',
+    '/doom/stonew5.png', '/doom/pbrick8.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
+  ])
+  useMemo(() => retro(lite), [lite])
+
+  // walls touching the outside are house fronts, or the museum facade on the building's west face (x = 0)
+  const { inner, front, houses, doors } = useMemo(() => {
+    const inner: Cell[] = [], front: Cell[] = [], houses: Cell[] = [], doors: Cell[] = []
+    const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
+    layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
+      const tx = j + layout.x0, tz = i + layout.z0
       if (c === 'D') doors.push([tx, tz])
-      if (c === '#' && (open(tx + 1, tz) || open(tx - 1, tz) || open(tx, tz + 1) || open(tx, tz - 1))) walls.push([tx, tz])
+      if (c !== '#') return
+      const near = [at(tx + 1, tz), at(tx - 1, tz), at(tx, tz + 1), at(tx, tz - 1)]
+      if (near.includes('o')) (tx === 0 ? front : houses).push([tx, tz])
+      else if (near.some((n) => n !== '#')) inner.push([tx, tz])
     }))
-    return { walls, doors }
+    return { inner, front, houses, doors }
   }, [layout])
 
-  const wallsRef = useRef<THREE.InstancedMesh>(null!)
-  useLayoutEffect(() => {
-    const m = new THREE.Matrix4()
-    walls.forEach(([tx, tz], i) => wallsRef.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, WALL_H / 2, (tz + 0.5) * TILE)))
-    wallsRef.current.instanceMatrix.needsUpdate = true
-    wallsRef.current.computeBoundingSphere()
-  }, [walls])
-
-  const w = cols * TILE, d = rows * TILE, cz = layout.z0 * TILE + d / 2
+  const z0 = layout.z0 * TILE, z1 = (layout.z0 + layout.rows.length) * TILE
+  const end = (layout.rows[0].length + layout.x0) * TILE // the building spans x = 0..end
   return (
     <>
-      <instancedMesh ref={wallsRef} name="walls" args={[undefined, undefined, walls.length]}>
-        <boxGeometry args={[TILE, WALL_H, TILE]} />
-        <meshBasicMaterial map={wall} />
-      </instancedMesh>
-      <mesh rotation-x={-Math.PI / 2} position={[w / 2, 0, cz]}>
-        <planeGeometry args={[w, d]} />
-        <meshBasicMaterial map={floorTex} />
-      </mesh>
-      <mesh rotation-x={Math.PI / 2} position={[w / 2, WALL_H, cz]}>
-        <planeGeometry args={[w, d]} />
-        <meshBasicMaterial map={ceilTex} />
-      </mesh>
-      {doors.map(([tx, tz]) => (
-        <mesh key={`${tx},${tz}`} position={[(tx + 0.5) * TILE, (DOOR_H + WALL_H) / 2, (tz + 0.5) * TILE]}>
-          <boxGeometry args={[TILE, WALL_H - DOOR_H, TILE]} />
-          <meshBasicMaterial map={wall} />
-        </mesh>
-      ))}
-      <mesh rotation-x={-Math.PI / 2} position={[1.5 * TILE, 0.01, 1.5 * TILE]}>
+      <group name="walls">
+        <WallSet cells={inner} tex={wall} height={WALL_H} />
+        <WallSet cells={front} tex={facade} height={FACADE_H} />
+        <WallSet cells={houses} tex={house} height={HOUSE_H} />
+      </group>
+      <Ground x={[0, end]} z={[z0, z1]} tex={floor} />
+      <Ground x={[0, end]} z={[z0, z1]} tex={ceil} y={WALL_H} />
+      {layout.x0 < 0 && (
+        <>
+          <Ground x={[layout.x0 * TILE, STREET_X]} z={[z0, z1]} tex={street} size={[2 * TILE, TILE]} />
+          <Ground x={[STREET_X, 0]} z={[z0, z1]} tex={sidewalk} />
+          <Text position={[-0.05, 5, 1.5 * TILE]} rotation-y={-Math.PI / 2} fontSize={1} color={GOLD}
+            outlineWidth={0.04} outlineColor="#3a2a14">ARCHIVUM</Text>
+          <Props props={layout.props} />
+          <FrontDoor tex={door} />
+        </>
+      )}
+      {doors.map(([tx, tz]) => tx === 0
+        ? <Lintel key="front" tx={tx} tz={tz} tex={facade} top={FACADE_H} />
+        : <Lintel key={`${tx},${tz}`} tx={tx} tz={tz} tex={wall} top={WALL_H} />)}
+      <mesh rotation-x={-Math.PI / 2} position={[1.5 * TILE, 0.01, 0.5 * TILE]}>
         <planeGeometry args={[TILE, TILE]} />
         <meshBasicMaterial map={lite} />
       </mesh>
-      <Text position={[TILE + 0.03, 2, 1.5 * TILE]} rotation-y={Math.PI / 2} fontSize={0.3} color={GOLD}>ASCENSOR</Text>
+      <Text position={[TILE + 0.03, 2, 0.5 * TILE]} rotation-y={Math.PI / 2} fontSize={0.3} color={GOLD}>ASCENSOR</Text>
       {layout.rooms.map((r) => (
         <Text key={r.id} position={[r.sign.x, (DOOR_H + WALL_H) / 2, r.sign.z]} rotation-y={r.sign.rot}
           fontSize={0.22} maxWidth={TILE * 1.8} textAlign="center" color={GOLD}>
@@ -117,6 +153,108 @@ function World({ layout, byRoom, quiet }: { layout: Layout; byRoom: Map<string, 
       </group>
     </>
   )
+}
+
+// one instanced box per wall tile; the texture repeats once per tile across and every TILE meters up
+function WallSet({ cells, tex, height }: { cells: Cell[]; tex: THREE.Texture; height: number }) {
+  const ref = useRef<THREE.InstancedMesh>(null!)
+  const map = useMemo(() => {
+    const t = tex.clone()
+    retro(t, true)
+    t.repeat.set(1, height / TILE)
+    return t
+  }, [tex, height])
+  useLayoutEffect(() => {
+    const m = new THREE.Matrix4()
+    cells.forEach(([tx, tz], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, height / 2, (tz + 0.5) * TILE)))
+    ref.current.instanceMatrix.needsUpdate = true
+    ref.current.computeBoundingSphere()
+  }, [cells, height])
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, cells.length]}>
+      <boxGeometry args={[TILE, height, TILE]} />
+      <meshBasicMaterial map={map} />
+    </instancedMesh>
+  )
+}
+
+// a textured floor (or a ceiling when y > 0) over x × z; size is how many meters one copy of the texture covers
+function Ground({ x: [x0, x1], z: [z0, z1], tex, y = 0, size = [TILE, TILE] }: {
+  x: [number, number]; z: [number, number]; tex: THREE.Texture; y?: number; size?: [number, number]
+}) {
+  const w = x1 - x0, d = z1 - z0
+  const map = useMemo(() => {
+    const t = tex.clone()
+    retro(t, true)
+    t.repeat.set(w / size[0], d / size[1])
+    return t
+  }, [tex, w, d, size[0], size[1]])
+  return (
+    <mesh rotation-x={y > 0 ? Math.PI / 2 : -Math.PI / 2} position={[(x0 + x1) / 2, y, (z0 + z1) / 2]}>
+      <planeGeometry args={[w, d]} />
+      <meshBasicMaterial map={map} />
+    </mesh>
+  )
+}
+
+function Lintel({ tx, tz, tex, top }: { tx: number; tz: number; tex: THREE.Texture; top: number }) {
+  const map = useMemo(() => {
+    const t = tex.clone()
+    retro(t, true)
+    t.repeat.set(1, (top - DOOR_H) / TILE)
+    return t
+  }, [tex, top])
+  return (
+    <mesh position={[(tx + 0.5) * TILE, (DOOR_H + top) / 2, (tz + 0.5) * TILE]}>
+      <boxGeometry args={[TILE, top - DOOR_H, TILE]} />
+      <meshBasicMaterial map={map} />
+    </mesh>
+  )
+}
+
+// The front door slides up into the lintel like a Doom door when you come near, and drops behind you.
+// shortcut: it only reacts to you, so other visitors seem to walk through it while it's closed on your screen
+const frontDoor = { open: 0 } // 0 closed .. 1 open; Player reads it to block the doorway
+const DOOR_AT = { x: 0.5 * TILE, z: 1.5 * TILE } // center of the front door tile (0, 1)
+
+function FrontDoor({ tex }: { tex: THREE.Texture }) {
+  const ref = useRef<THREE.Mesh>(null!)
+  const near = useRef(false)
+  const sound = useMemo(() => ({ open: new Audio('/doom/dsdoropn.wav'), close: new Audio('/doom/dsdorcls.wav') }), [])
+  useMemo(() => retro(tex), [tex])
+  useFrame(({ camera }, dt) => {
+    const now = Math.hypot(camera.position.x - DOOR_AT.x, camera.position.z - DOOR_AT.z) < 4
+    if (now !== near.current) {
+      near.current = now
+      const s = now ? sound.open : sound.close
+      s.currentTime = 0
+      s.volume = 0.5
+      s.play().catch(() => {}) // blocked until the first click
+    }
+    frontDoor.open = THREE.MathUtils.clamp(frontDoor.open + (now ? 2.5 : -2.5) * Math.min(dt, 0.1), 0, 1)
+    ref.current.position.y = DOOR_H / 2 + frontDoor.open * DOOR_H
+  })
+  return (
+    <mesh ref={ref} position={[DOOR_AT.x, DOOR_H / 2, DOOR_AT.z]}>
+      <boxGeometry args={[0.25, DOOR_H, TILE]} />
+      <meshBasicMaterial map={tex} />
+    </mesh>
+  )
+}
+
+// shortcut: props are walk-through sprites; mark their tiles solid if people start hiding inside trees
+function Props({ props }: { props: Prop[] }) {
+  const art = { tree: useTexture('/doom/smita0.png'), lamp: useTexture('/doom/tlmpa0.png') }
+  useMemo(() => { retro(art.tree); retro(art.lamp) }, [art.tree, art.lamp])
+  const scale = { tree: 1.6, lamp: 1 } // trees a bit bigger than Doom size so they read as trees
+  return props.map((p, i) => {
+    const img = art[p.kind].image as HTMLImageElement, s = PX * scale[p.kind]
+    return (
+      <sprite key={i} position={[p.x, (img.height * s) / 2, p.z]} scale={[img.width * s, img.height * s, 1]}>
+        <spriteMaterial map={art[p.kind]} alphaTest={0.5} />
+      </sprite>
+    )
+  })
 }
 
 // ---- exhibits ----
@@ -222,7 +360,14 @@ function Player({ layout, floorId, onElevator, onPick }: {
   const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, 4), [])
   const dir = useMemo(() => new THREE.Vector3(), [])
 
-  const spawn = () => { camera.position.set(SPAWN.x, EYE, SPAWN.z); camera.rotation.set(0, -Math.PI / 2, 0) }
+  // arriving at the museum puts you at layout.start (the street); the elevator drops you next to itself
+  const arrived = useRef(false)
+  const spawn = () => {
+    const s = arrived.current ? SPAWN : layout.start
+    arrived.current = true
+    camera.position.set(s.x, EYE, s.z)
+    camera.rotation.set(0, -Math.PI / 2, 0)
+  }
   useEffect(spawn, [floorId])
 
   useEffect(() => {
@@ -247,7 +392,12 @@ function Player({ layout, floorId, onElevator, onPick }: {
     const fwd = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0)
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0)
     const step = (k.ShiftLeft || k.ShiftRight ? 8 : 4) * dt
-    const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => tileAt(layout, x + a, z + b) !== '#')
+    // walls, and the front door (the only doorway at x < TILE) until it's mostly up
+    const solid = (x: number, z: number) => {
+      const t = tileAt(layout, x, z)
+      return t === '#' || (t === 'D' && x < TILE && frontDoor.open < 0.8)
+    }
+    const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => !solid(x + a, z + b))
     const nx = p.x + (dir.x * fwd - dir.z * side) * step
     const nz = p.z + (dir.z * fwd + dir.x * side) * step
     if (free(nx, p.z)) p.x = nx
@@ -256,6 +406,12 @@ function Player({ layout, floorId, onElevator, onPick }: {
 
     const elevator = tileAt(layout, p.x, p.z) === 'E'
     if (elevator !== last.current.elevator) onElevator((last.current.elevator = elevator))
+
+    // outside the fog turns into a light haze, inside back to Doom darkness
+    const out = tileAt(layout, p.x, p.z) === 'o', fog = scene.fog as THREE.Fog, f = Math.min(1, dt * 3)
+    fog.color.lerp(out ? HAZE_COLOR : DARK, f)
+    fog.near += ((out ? 25 : 3) - fog.near) * f
+    fog.far += ((out ? 70 : 24) - fog.far) * f
 
     // what the crosshair points at; walls block it
     ray.setFromCamera(CENTER, camera)
