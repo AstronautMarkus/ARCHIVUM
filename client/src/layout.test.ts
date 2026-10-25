@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildFloor, tileAt, SPAWN, TILE } from './layout.ts'
+import { buildFloor, tileAt, SOLID, SPAWN, TILE } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
+const walkable = (c: string) => !SOLID.includes(c)
 
 // every walkable tile must be reachable from the spawn point
 function reachableAll(l: ReturnType<typeof buildFloor>) {
@@ -13,13 +14,12 @@ function reachableAll(l: ReturnType<typeof buildFloor>) {
     const [tx, tz] = queue.pop()!
     for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nx = tx + a, nz = tz + b
-      if (tileAt(l, (nx + 0.5) * TILE, (nz + 0.5) * TILE) !== '#' && !seen.has(key(nx, nz))) {
+      if (walkable(tileAt(l, (nx + 0.5) * TILE, (nz + 0.5) * TILE)) && !seen.has(key(nx, nz))) {
         seen.add(key(nx, nz)); queue.push([nx, nz])
       }
     }
   }
-  const open = l.rows.join('').replaceAll('#', '').length
-  return seen.size === open
+  return seen.size === [...l.rows.join('')].filter(walkable).length
 }
 
 test('empty floor has a corridor, elevator and walkable spawn', () => {
@@ -30,31 +30,36 @@ test('empty floor has a corridor, elevator and walkable spawn', () => {
   assert.ok(reachableAll(l))
 })
 
-test('the ground floor opens onto a street through the front door', () => {
-  const inside = buildFloor(rooms([2, 3, 9]))
+test('the ground floor: street, front door, lobby, courtyard and rooms all connect', () => {
   const l = buildFloor(rooms([2, 3, 9]), true)
   assert.equal(tileAt(l, l.start.x, l.start.z), 'o')
-  assert.equal(tileAt(l, 1, 3), 'D')
-  assert.equal(tileAt(l, -0.1, 3), 'o')
-  assert.ok(reachableAll(l), 'street, sidewalk and every room connect through the door')
-  assert.deepEqual(l.rooms, inside.rooms, 'the outside does not move any room')
-  for (const p of l.props) assert.equal(tileAt(l, p.x, p.z), 'o')
+  assert.equal(tileAt(l, l.door!.x, l.door!.z - 1), 'D')
+  assert.equal(tileAt(l, l.door!.x, l.door!.z + 1), 'D')
+  assert.equal(tileAt(l, SPAWN.x, SPAWN.z), 'L', 'the elevator drops you in the lobby')
+  assert.equal(tileAt(l, l.court!.fountain.x, l.court!.fountain.z), 'F')
+  assert.ok(reachableAll(l))
+  for (const p of l.props) assert.ok('og'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside`)
+  assert.ok(l.props.some((p) => p.kind === 'sakura'))
 })
 
 test('each exhibit gets a slot on a wall facing an open tile', () => {
-  const l = buildFloor(rooms([0, 12, 3, 40, 1]))
-  assert.deepEqual(l.rooms.map((r) => r.slots.length), [0, 12, 3, 40, 1])
-  for (const s of l.rooms.flatMap((r) => r.slots)) {
-    const nx = Math.sin(s.rot) * 0.2, nz = Math.cos(s.rot) * 0.2
-    assert.notEqual(tileAt(l, s.x + nx, s.z + nz), '#', 'front of the frame is open')
-    assert.equal(tileAt(l, s.x - nx, s.z - nz), '#', 'back of the frame is wall')
+  for (const ground of [false, true]) {
+    const l = buildFloor(rooms([0, 12, 3, 40, 1]), ground)
+    assert.deepEqual(l.rooms.map((r) => r.slots.length), [0, 12, 3, 40, 1])
+    for (const s of l.rooms.flatMap((r) => r.slots)) {
+      const nx = Math.sin(s.rot) * 0.2, nz = Math.cos(s.rot) * 0.2
+      assert.notEqual(tileAt(l, s.x + nx, s.z + nz), '#', 'front of the frame is open')
+      assert.equal(tileAt(l, s.x - nx, s.z - nz), '#', 'back of the frame is wall')
+    }
+    assert.ok(reachableAll(l))
   }
-  assert.ok(reachableAll(l))
 })
 
 test('adding exhibits or rooms never moves existing rooms', () => {
-  const before = buildFloor(rooms([2, 2, 2]))
-  const after = buildFloor(rooms([30, 2, 2, 5]))
-  for (const i of [1, 2]) assert.deepEqual(after.rooms[i], before.rooms[i])
-  assert.deepEqual(after.rooms[0].sign, before.rooms[0].sign)
+  for (const ground of [false, true]) {
+    const before = buildFloor(rooms([2, 2, 2]), ground)
+    const after = buildFloor(rooms([30, 2, 2, 5, 1, 1, 1, 1]), ground)
+    for (const i of [1, 2]) assert.deepEqual(after.rooms[i], before.rooms[i])
+    assert.deepEqual(after.rooms[0].sign, before.rooms[0].sign)
+  }
 })
