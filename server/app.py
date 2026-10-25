@@ -8,6 +8,7 @@ import math
 import os
 import secrets
 import threading
+import time
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -324,7 +325,7 @@ def is_num(v):
 
 @sock.route('/ws')
 def live(ws):
-    """First message {token} ('' for guests), then {f: floorId, x, z, y: yaw} ~10/s."""
+    """First message {token} ('' for guests), then {f: floorId, x, z, y: yaw} ~10/s, or {chat: text}."""
     pid = next(ids)
     try:
         first = json.loads(ws.receive(timeout=10) or '{}')
@@ -335,15 +336,23 @@ def live(ws):
     name = user['name'] if user else f'Invitado {pid}'
     with peers_lock:
         peers[ws] = threading.Lock()
+    last_chat = 0.0
     try:
-        # shortcut: no rate limit, every position goes to every visitor; fine for a group of friends
+        # shortcut: no rate limit on positions, every one goes to every visitor; fine for a group of friends
         while True:
             try:
                 p = json.loads(ws.receive())
             except ValueError:
                 continue
-            if (isinstance(p, dict) and isinstance(p.get('f'), str) and len(p['f']) <= 32
-                    and all(is_num(p.get(k)) for k in 'xzy')):
+            if not isinstance(p, dict):
+                continue
+            if isinstance(p.get('chat'), str):
+                text = p['chat'].strip()[:200]
+                # chat needs an account and allows one message per second; the sender gets it back too
+                if user and text and time.monotonic() - last_chat >= 1:
+                    last_chat = time.monotonic()
+                    broadcast({'id': pid, 'n': name, 'chat': text})
+            elif isinstance(p.get('f'), str) and len(p['f']) <= 32 and all(is_num(p.get(k)) for k in 'xzy'):
                 broadcast({'id': pid, 'n': name, 'f': p['f'], 'x': p['x'], 'z': p['z'], 'y': p['y']}, skip=ws)
     except ConnectionClosed:
         pass

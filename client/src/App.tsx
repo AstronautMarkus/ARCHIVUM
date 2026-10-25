@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fileUrl, getToken, logout, useMuseum, useUser, type Exhibit, type Museum, type User } from './api'
-import { MuseumView } from './Museum'
+import { MuseumView, type Chat } from './Museum'
 import { Admin } from './Admin'
 import { AuthForm } from './Auth'
 
@@ -20,6 +20,7 @@ export default function App() {
 }
 
 const KIND = { photo: 'Foto', video: 'Video', audio: 'Música', note: 'Nota' }
+let lineKey = 0
 
 function Visit({ museum, user, reload }: { museum: Museum; user: User | null; reload: () => void }) {
   const [floorIdx, setFloorIdx] = useState(0)
@@ -28,6 +29,10 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [picked, setPicked] = useState<Exhibit | null>(null)
   const [viewing, setViewing] = useState<Exhibit | null>(null)
   const [login, setLogin] = useState(false)
+  const [talking, setTalking] = useState(false)
+  const [chat, setChat] = useState<(Chat & { key: number })[]>([])
+  const say = useRef<(text: string) => void>(() => {})
+  const onChat = useCallback((m: Chat) => setChat((c) => [...c.slice(-7), { ...m, key: ++lineKey }]), [])
   const floors = museum.floors
   const floor = floors[Math.min(floorIdx, floors.length - 1)]
 
@@ -36,24 +41,39 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.code === 'Escape') setViewing(null)
       if (e.code === 'KeyE' && picked) { setViewing(picked); document.exitPointerLock() }
+      if (e.code === 'KeyT' && user) { e.preventDefault(); setTalking(true) } // T talks, like in DOOM
       const n = Number(e.key)
       if (elevator && n >= 1 && n <= floors.length) setFloorIdx(n - 1)
     }
     addEventListener('keydown', onKey)
     return () => removeEventListener('keydown', onKey)
-  }, [picked, elevator, floors.length])
+  }, [picked, elevator, floors.length, user])
 
   if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
   return (
     <>
       <MuseumView museum={museum} floor={floor} token={user ? getToken() : ''} quiet={!!viewing}
-        onElevator={setElevator} onPick={setPicked} onLock={setLocked} onChanged={reload} />
+        onElevator={setElevator} onPick={setPicked} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
           <span>ARCHIVUM · {floor.name}</span>
           {user
             ? <span>{user.name} · <a href="#admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
             : <button onClick={() => setLogin(true)}>Entrar / Registrarse</button>}
+        </div>
+        <div className={talking ? 'chat open' : 'chat'} aria-live="polite">
+          {chat.map((m) => <div key={m.key}><b>{m.n}:</b> {m.chat}</div>)}
+          {talking && (
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              const text = String(new FormData(e.currentTarget).get('text')).trim()
+              if (text) say.current(text)
+              setTalking(false)
+            }}>
+              <input name="text" autoFocus maxLength={200} autoComplete="off" aria-label="Mensaje" placeholder="Di algo… (Enter)"
+                onBlur={() => setTalking(false)} onKeyDown={(e) => e.key === 'Escape' && setTalking(false)} />
+            </form>
+          )}
         </div>
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
@@ -66,7 +86,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           <div>
             <h1>ARCHIVUM</h1>
             <p>Click para entrar</p>
-            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · E: ver de cerca · Esc: salir</p>
+            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · E: ver de cerca · T: chatear · Esc: salir</p>
           </div>
         </div>
       )}

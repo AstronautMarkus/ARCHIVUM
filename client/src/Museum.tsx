@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
@@ -19,10 +19,11 @@ function retro(t: THREE.Texture, repeat = false) {
 type Props = {
   museum: Museum; floor: Floor; token: string; quiet: boolean
   onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void; onLock: (locked: boolean) => void
-  onChanged: () => void
+  onChanged: () => void; onChat: (m: Chat) => void; say: RefObject<(text: string) => void>
 }
+export type Chat = { id: number; n: string; chat: string }
 
-export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, onLock, onChanged }: Props) {
+export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, onLock, onChanged, onChat, say }: Props) {
   const rooms = museum.rooms.filter((r) => r.floor === floor.id)
   const byRoom = Map.groupBy(museum.exhibits, (e) => e.room)
   const key = rooms.map((r) => `${r.id}:${r.title}:${byRoom.get(r.id)?.length ?? 0}`).join()
@@ -37,7 +38,7 @@ export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, on
       <fog attach="fog" args={['#000', 3, 24]} />
       <Suspense fallback={null}>
         <World layout={layout} byRoom={byRoom} quiet={quiet} />
-        <Avatars floorId={floor.id} token={token} onChanged={onChanged} />
+        <Avatars floorId={floor.id} token={token} onChanged={onChanged} onChat={onChat} say={say} />
       </Suspense>
       <Player layout={layout} floorId={floor.id} onElevator={onElevator} onPick={onPick} />
       <PointerLockControls selector="#lock" onLock={() => onLock(true)} onUnlock={() => onLock(false)} />
@@ -276,8 +277,8 @@ const LIVE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host
 const SPRITES = [...'abcd'].flatMap((f) => [`${f}1`, `${f}2${f}8`, `${f}3${f}7`, `${f}4${f}6`, `${f}5`].map((r) => `/doom/play${r}.png`))
 const PX = 1.8 / 56 // sprite pixels to meters: the marine is 56px tall
 
-// the same socket carries other visitors' positions and the server's "museum changed" pushes
-function Avatars({ floorId, token, onChanged }: { floorId: string; token: string; onChanged: () => void }) {
+// the same socket carries other visitors' positions, chat, and the server's "museum changed" pushes
+function Avatars({ floorId, token, onChanged, onChat, say }: Pick<Props, 'token' | 'onChanged' | 'onChat' | 'say'> & { floorId: string }) {
   const peers = useRef(new Map<number, Peer>())
   const [ids, setIds] = useState<number[]>([])
   const ws = useRef<WebSocket | null>(null)
@@ -292,6 +293,7 @@ function Avatars({ floorId, token, onChanged }: { floorId: string; token: string
     }
     const connect = () => {
       sock = ws.current = new WebSocket(LIVE)
+      say.current = (text) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ chat: text })) }
       sock.onopen = () => {
         sock.send(JSON.stringify({ token }))
         if (opened) onChanged() // reconnected: we may have missed changes
@@ -300,6 +302,7 @@ function Avatars({ floorId, token, onChanged }: { floorId: string; token: string
       sock.onmessage = (e) => {
         const m = JSON.parse(e.data)
         if (m.t === 'changed') return onChanged()
+        if (m.chat) return onChat(m)
         if (m.bye) peers.current.delete(m.id)
         else peers.current.set(m.id, { ...m, t: performance.now() })
         sync()
@@ -312,7 +315,7 @@ function Avatars({ floorId, token, onChanged }: { floorId: string; token: string
     }
     connect()
     return () => { alive = false; clearTimeout(retry); sock.close() }
-  }, [token, onChanged])
+  }, [token, onChanged, onChat, say])
 
   const since = useRef(0)
   useFrame(({ camera }, dt) => {
