@@ -14,7 +14,8 @@ export const TILE = 2
 export const WALL_H = 3.5 // also one storey: floors stack with no gap
 export const DOOR_H = 2.2
 export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE } // a safe spot in the lobby, on every floor
-// wall, fountain, reception desk, courtyard void, the shrine's hall; posts and the elevator are special
+// wall, fountain, reception desk, courtyard void, 'H' a block drawn by its own component (the shrine's hall, the
+// entrance's piers); posts and the elevator are special
 export const SOLID = '#FRvH'
 export const MAX_FLOORS = 99
 export const COLUMN = 0.35 // half the width of a column
@@ -22,6 +23,8 @@ export const TORII = 2.3 // how far each pillar of the shrine's torii stands fro
 // what stops you around each prop, as half the width of its trunk, post or base
 const BODY = { tree: COLUMN, oak: COLUMN, sakura: 0.25, statue: 0.45, lamp: 0.2, light: 0.25 }
 const LANTERN = 0.3, PILLAR = 0.25 // the shrine's stone lanterns and the torii's pillars
+// the entrance stands out this many tiles from the facade; its two columns stand this far in from its front, this thick
+const PORCH = 2, PORTICO = 0.8, SHAFT = 0.4
 // the elevator shaft: two tiles wide on the courtyard's west edge, beside the entrance axis (rows 6-7) so walking
 // in from the street you see straight into the courtyard; its doors face the lobby. z: center, w: width along z,
 // door: width of the opening, which leaves room on both sides for the open doors to slide away
@@ -53,6 +56,8 @@ export type Layout = {
   props: Prop[]
   rooms: { id: string; title: string; sign: Slot; slots: Slot[] }[]
   door?: { x: number; z: number; w: number } // the front door (ground floor), world units
+  // the entrance pavilion around the door: its front x, center z, width and depth, and its two columns; world units
+  entrance?: { x: number; z: number; w: number; d: number; columns: { x: number; z: number }[] }
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
   // the shrine's hall, the z of its torii and where its lanterns stand; world units
   shrine?: { x: number; z: number; w: number; d: number; gate: number; lanterns: { x: number; z: number }[] }
@@ -105,7 +110,11 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(box.x1 + m + 1 - x0).fill('#'))
   const set = (tx: number, tz: number, c: string) => { grid[tz - z0][tx - x0] = c }
   const posts = new Map<string, Post>()
-  const post = (x: number, z: number, r: number) => posts.set(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`, { x, z, r })
+  // a post goes on every tile it reaches into, so solidAt only ever has to look at the tile you're on
+  const post = (x: number, z: number, r: number) => {
+    const p = { x, z, r }, t = (v: number) => Math.floor(v / TILE)
+    for (let tx = t(x - r); tx <= t(x + r); tx++) for (let tz = t(z - r); tz <= t(z + r); tz++) posts.set(`${tx},${tz}`, p)
+  }
   const fill = (xa: number, xb: number, za: number, zb: number, c: string) => {
     for (let tx = xa; tx <= xb; tx++) for (let tz = za; tz <= zb; tz++) set(tx, tz, c)
   }
@@ -119,21 +128,14 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     fill(mx, mx + 1, COURT_Z0, COURT_Z1, 'p')
     fill(mx, mx + 1, mz, mz + 1, 'F')
   } else fill(COURT_X0, courtX1, COURT_Z0, COURT_Z1, 'v')
-  // around the courtyard a column on the corners and every other tile, carrying the arches of an arcade: open on the
-  // ground floor, balconies upstairs
+  // around the courtyard, with no columns: an open ring on the ground floor, balconies upstairs
   // (the elevator shaft takes its place in the ring first)
   fill(LIFT.tx, LIFT.tx, LIFT.tz0, LIFT.tz1, 'E')
   const ax = LOBBY_X1 + 1, bx = courtX1 + 1, az = COURT_Z0 - 1, bz = COURT_Z1 + 1
   for (let tx = ax; tx <= bx; tx++) {
     for (let tz = az; tz <= bz; tz++) {
-      const edgeX = tx === ax || tx === bx, edgeZ = tz === az || tz === bz
-      if ((!edgeX && !edgeZ) || grid[tz - z0][tx - x0] === 'E') continue
-      const along = edgeX ? tz - az : tx - ax, length = edgeX ? bz - az : bx - ax
-      if ((edgeX && edgeZ) || (along % 2 === 0 && along < length - 1)) { // never two side by side
-        set(tx, tz, 'C')
-        post((tx + 0.5) * TILE, (tz + 0.5) * TILE, COLUMN)
-      }
-      else if (!ground) set(tx, tz, 'B')
+      const edge = tx === ax || tx === bx || tz === az || tz === bz
+      if (edge && !ground && grid[tz - z0][tx - x0] !== 'E') set(tx, tz, 'B')
     }
   }
   // how far (tx, tz) is out from the building's outer walls along x and along z, in tiles; 0 or less is inside
@@ -154,6 +156,11 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
         // the shrine grounds are laid out below; past the east and south sidewalks, the city
       }
     }
+    // the entrance pavilion stands out from the facade around the door: a porch between two solid piers, its roof
+    // held up by two columns, one either side of the door
+    fill(-PORCH, -1, 4, 9, 'H')
+    fill(-PORCH, -1, 5, 8, 'p')
+    for (const tz of [6, 8]) post(-PORCH * TILE + PORTICO, tz * TILE, SHAFT)
   }
 
   const out = rooms.map((r, i) => {
@@ -188,12 +195,12 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   fill(px, px + 1, sz + 6, sz + WILD - 1, 'p')
   fill(px - 1, px + 2, sz + 4, sz + 5, 'H')
 
-  // lamps flanking the door and lights at the garden gate; trees around the garden with a statue on each corner,
+  // lights at the garden gate; trees around the garden with a statue on each corner,
   // lamps along the sidewalk, cherry trees along both long sides of the courtyard and beside the shrine, and two
   // statues guarding its path
   const mid = (c: string) => (BLOCK.indexOf(c) + BLOCK.lastIndexOf(c)) / 2 + 1 // how far out a band's middle is
   const garden = mid('g'), gate = BLOCK.lastIndexOf('g') + 1
-  const props = [prop('lamp', -1, 5), prop('lamp', -1, 8), prop('light', -gate, 5), prop('light', -gate, 8)]
+  const props = [prop('light', -gate, 5), prop('light', -gate, 8)]
   for (let tx = x0; tx <= box.x1 + m; tx++) {
     for (let tz = z0; tz <= z1; tz++) {
       const [dx, dz] = away(tx, tz), d = Math.max(dx, dz), n = (((tx + tz) % 12) + 12) % 12
@@ -223,6 +230,10 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     rows: grid.map((r) => r.join('')), x0, z0, footprint: box, props, rooms: out, posts,
     start: { x: (box.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
     door: { x: 0.5 * TILE, z: 7 * TILE, w: 2 * TILE },
+    entrance: {
+      x: -PORCH * TILE, z: 7 * TILE, w: 6 * TILE, d: PORCH * TILE,
+      columns: [6, 8].map((tz) => ({ x: -PORCH * TILE + PORTICO, z: tz * TILE })),
+    },
     court: {
       x0: COURT_X0 * TILE, x1: (courtX1 + 1) * TILE, z0: COURT_Z0 * TILE, z1: (COURT_Z1 + 1) * TILE,
       fountain: { x: (mx + 1) * TILE, z: (mz + 1) * TILE },

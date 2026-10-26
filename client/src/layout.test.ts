@@ -38,6 +38,11 @@ test('the ground floor: street, front door, lobby, courtyard and rooms all conne
   assert.ok(reachableAll(l))
   for (const p of l.props) assert.ok('gpsT'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside, off the street`)
   assert.ok(l.props.some((p) => p.kind === 'sakura'))
+  // the entrance: a column either side of the way in, solid piers at its ends
+  const e = l.entrance!
+  for (const c of e.columns) assert.ok(solidAt(l, c.x, c.z))
+  assert.ok(!solidAt(l, e.columns[0].x, e.z), 'the way in between the columns is clear')
+  assert.ok(solidAt(l, e.x + 1, e.z - e.w / 2 + 1) && solidAt(l, e.x + 1, e.z + e.w / 2 - 1), 'a pier at either end')
 })
 
 test('the elevator shaft is in the same place on every floor, its doors facing the lobby', () => {
@@ -66,12 +71,12 @@ test('the building is the same box on every floor, with the street going all the
   assert.match([...Array(10)].map((_, k) => tileAt(g, -(k + 0.5) * TILE, 7 * TILE)).join(''), /^p+s+o+s+[gT]$/, 'a walk to the door')
 })
 
-test('columns only block their shaft, so you can walk right up to them', () => {
-  const l = buildFloor([], { ground: true })
-  assert.equal(tileAt(l, 13, 5), 'C')
-  assert.ok(solidAt(l, 13, 5))
-  assert.ok(!solidAt(l, 13 + COLUMN + 0.1, 5))
-  assert.ok(solidAt(l, 1, 1), 'a wall tile is solid all over')
+test('nothing stands in the ring around the courtyard: open on the ground floor, balconies upstairs', () => {
+  const [g, up] = buildBuilding([rooms([]), rooms([])])
+  for (const l of [g, up]) assert.ok(!l.rows.join('').includes('C') && !solidAt(l, 13, 5), 'no columns')
+  assert.equal(tileAt(g, 13, 5), '.')
+  assert.equal(tileAt(up, 13, 5), 'B')
+  assert.ok(solidAt(g, 1, 1), 'a wall tile is solid all over')
 })
 
 test('each exhibit gets a slot on a wall facing an open tile', () => {
@@ -119,13 +124,13 @@ test('past the city: a forest to the west, houses to the north and a shrine in t
   assert.ok(reachableAll(g))
 })
 
-test('every prop stops you where it stands, and each post fits inside its own tile', () => {
+test('every prop stops you where it stands, and every tile a post reaches into knows about it', () => {
   const [g] = buildBuilding([rooms([2, 3, 9])])
   for (const p of g.props) assert.ok(solidAt(g, p.x, p.z), `${p.kind} stops you`)
-  for (const [key, p] of g.posts) {
-    const corners = [[-1, -1], [1, 1]].map(([a, b]) => `${Math.floor((p.x + a * p.r) / TILE)},${Math.floor((p.z + b * p.r) / TILE)}`)
-    assert.deepEqual(corners, [key, key], 'one tile is all solidAt has to look at')
+  for (const p of new Set(g.posts.values())) {
+    for (const [a, b] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
+      const x = p.x + a * (p.r - 0.01), z = p.z + b * (p.r - 0.01)
+      assert.equal(g.posts.get(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`), p, 'and no other post took that tile')
+    }
   }
-  const columns = g.rows.join('').split('C').length - 1, s = g.shrine!
-  assert.equal(g.posts.size, columns + g.props.length + 2 + s.lanterns.length, 'never two on one tile')
 })

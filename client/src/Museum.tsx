@@ -241,9 +241,9 @@ function World({ layouts, byRoom, quiet, current, view }: {
           if (c === 'D') t.doors.push(cell)
           if (c === 'C') {
             t.columns.push(cell)
-            // an arch on to the next column along the arcade, two or three tiles on with open floor in between
+            // an arch on to the next column along the arcade, two to five tiles on with open floor in between
             for (const [a, b] of [[1, 0], [0, 1]]) {
-              for (let n = 1; n <= 3; n++) {
+              for (let n = 1; n <= 5; n++) {
                 const next = at(tx + a * n, tz + b * n)
                 if (next === 'C' && n > 1) t.arches.push([x + (a * n * TILE) / 2, y, z + (b * n * TILE) / 2, n, a])
                 if (next !== '.' && next !== 'B') break
@@ -332,12 +332,8 @@ function World({ layouts, byRoom, quiet, current, view }: {
       {t.doors.map(([tx, tz, y]) => tx === 0 && y === 0
         ? <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} soffit={ceil} top={STOREY} />
         : <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} soffit={ceil} top={WALL_H} />)}
-      {ground.door && (
-        <>
-          <Text position={[-0.22, (DOOR_H + STOREY) / 2, ground.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} {...TITLE}>ARCHIVUM</Text>
-          <FrontDoor at={ground.door} tex={door} />
-        </>
-      )}
+      {ground.door && <FrontDoor at={ground.door} tex={door} />}
+      {ground.entrance && <Entrance at={ground.entrance} floors={layouts.length} tex={{ stone: lobby, trim: stone, iron, door }} />}
       {t.desk.length > 0 && (
         <Text position={[TILE + 0.03, 2.2, t.deskZ]} rotation-y={Math.PI / 2} fontSize={0.6} {...TITLE}>RECEPCIÓN</Text>
       )}
@@ -561,8 +557,10 @@ function Columns({ cells, tex }: { cells: Cell[]; tex: THREE.Texture }) {
   )
 }
 
-// the arches between columns: a stone panel from the capitals up to the floor above, its opening a half ellipse.
-// One instanced mesh per span; extruded shapes are UV'd in meters, so the stone repeats once per tile
+// the arches between columns: a stone panel from the capitals up to the floor above, its opening a segmental arch
+// (the arc of the circle through both springing points and the crown), so wide spans stay arches and don't turn
+// into flattened ellipses. One instanced mesh per span; extruded shapes are UV'd in meters, so the stone repeats
+// once per tile
 function Arches({ spans, tex }: { spans: Arch[]; tex: THREE.Texture }) {
   const map = useTiled(tex, 1 / TILE, 1 / TILE)
   return [...Map.groupBy(spans, (s) => s[3])].map(([n, list]) => <ArchSet key={n} n={n} spans={list} map={map} />)
@@ -572,8 +570,9 @@ function ArchSet({ n, spans, map }: { n: number; spans: Arch[]; map: THREE.Textu
   const ref = useRef<THREE.InstancedMesh>(null!)
   const geometry = useMemo(() => {
     const w = (n * TILE) / 2, h = WALL_H - SPRING, open = w - 0.3 // the capitals are 0.3 wide on either side
+    const rise = Math.min(open, h - 0.25), r = (open * open + rise * rise) / (2 * rise), a = Math.atan2(r - rise, open)
     const shape = new THREE.Shape().moveTo(-w, 0).lineTo(-w, h).lineTo(w, h).lineTo(w, 0).lineTo(open, 0)
-    shape.absellipse(0, 0, open, h - 0.3, 0, Math.PI, false)
+    shape.absarc(0, rise - r, r, a, Math.PI - a, false)
     return new THREE.ExtrudeGeometry(shape, { depth: ARCH, bevelEnabled: false, curveSegments: 10 }).translate(0, 0, -ARCH / 2)
   }, [n])
   useLayoutEffect(() => {
@@ -586,6 +585,63 @@ function ArchSet({ n, spans, map }: { n: number; spans: Arch[]; map: THREE.Textu
     <instancedMesh ref={ref} args={[geometry, undefined, spans.length]}>
       <meshBasicMaterial map={map} />
     </instancedMesh>
+  )
+}
+
+// The entrance pavilion, standing out from the facade like a little tower: two solid piers and two stone columns
+// hold up a block that rises with the building and a bit above its roof, the museum's name on its frieze. With two
+// floors or more the columns stand two storeys tall in front of a balcony, like a national museum's portico
+const ATTIC = 2.6 // how far the entrance rises above the roof
+function Entrance({ at, floors, tex }: {
+  at: NonNullable<Layout['entrance']>; floors: number; tex: Record<'stone' | 'trim' | 'iron' | 'door', THREE.Texture>
+}) {
+  const { x, z, w, d, columns } = at
+  const back = x + d - 0.2, depth = back - x, mid = (x + back) / 2 // it meets the facade's skin at the back
+  const open = Math.min(2, floors) * STOREY, crown = floors * STOREY + PARAPET + ATTIC, porch = w - 2 * TILE // between the piers
+  const win = useMemo(() => withWindow(tex.stone), [tex.stone])
+  const front = useTiled(win, w / TILE, (crown - open) / STOREY), side = useTiled(tex.stone, depth / TILE, (crown - open) / TILE)
+  const floor = useTiled(tex.stone, depth / TILE, porch / TILE), door = useTiled(tex.door)
+  const column = useMemo(() => mergeGeometries([
+    square(0.45, 0.42, 0.45, 0),
+    new THREE.CylinderGeometry(0.32, 0.36, open - 0.95, 12).translate(0, 0.45 + (open - 0.95) / 2, 0),
+    square(0.3, 0.5, 0.5, open - 0.5),
+  ]), [open])
+  const piers = useMemo(() => [-1, 1].map((s): Box => [mid, open / 2, z + s * (w / 2 - TILE / 2), depth, open, TILE]), [mid, open, z, w, depth])
+  const trim = useMemo(() => {
+    const boxes: Box[] = [
+      [x - 0.1, open + 0.6, z, 0.3, 1.2, w + 0.2], // the frieze
+      [x - 0.15, open + 1.3, z, 0.7, 0.2, w + 0.7], // the cornice over it
+      [mid - 0.1, crown + 0.1, z, depth + 0.6, 0.2, w + 0.6], // the crowning cornice
+      [x - 0.3, 0.06, z, 0.6, 0.12, porch], // a step up into the porch
+    ]
+    if (floors > 1) boxes.push([(x + 1.4 + back) / 2, STOREY - 0.15, z, back - x - 1.4, 0.3, porch]) // the balcony
+    return boxes
+  }, [x, z, w, mid, back, depth, open, crown, porch, floors])
+  const rail = useMemo((): Box[] => (floors > 1 ? [[x + 1.4, STOREY + 0.5, z, 0.06, 1, porch]] : []), [x, z, porch, floors])
+  return (
+    <>
+      <Boxes boxes={piers} tex={tex.stone} repeat={[1, open / TILE]} />
+      <Boxes boxes={trim} tex={tex.trim} />
+      <Boxes boxes={rail} tex={tex.iron} cut />
+      {/* the block over the porch: windows on its front, plain stone elsewhere, the porch's ceiling underneath */}
+      <mesh position={[mid, (open + crown) / 2, z]}>
+        <boxGeometry args={[depth, crown - open, w]} />
+        {[side, front, side, side, side, side].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
+      </mesh>
+      {columns.map((c) => <mesh key={c.z} geometry={column} position={[c.x, 0, c.z]}><meshBasicMaterial map={tex.trim} /></mesh>)}
+      <mesh position={[mid, 0.02, z]} rotation-x={-Math.PI / 2}>
+        <planeGeometry args={[depth, porch]} />
+        <meshBasicMaterial map={floor} />
+      </mesh>
+      {/* two more doors either side of the real one, for show, tall enough to hide the skin's windows behind them */}
+      {[-1, 1].map((s) => (
+        <mesh key={s} position={[back - 0.01, 1.5, z + s * 3]} rotation-y={-Math.PI / 2}>
+          <planeGeometry args={[1.4, 3]} />
+          <meshBasicMaterial map={door} />
+        </mesh>
+      ))}
+      <Text position={[x - 0.26, open + 0.6, z]} rotation-y={-Math.PI / 2} fontSize={0.75} {...TITLE}>ARCHIVUM</Text>
+    </>
   )
 }
 
