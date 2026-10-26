@@ -15,6 +15,9 @@ label { display: grid; gap: 2px; }
 .hud button, .hud a { pointer-events: auto; }
 .top { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 8px 16px; }
 .bottom { position: absolute; bottom: 16px; left: 16px; right: 16px; text-align: center; color: var(--accent); }
+.fps { position: absolute; top: 44px; right: 16px; }
+.settings { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px; }
+.settings button:not(.sel) { background: #1c1912; color: var(--fg); }
 .crosshair { position: absolute; top: 50%; left: 50%; translate: -50% -50%; }
 .overlay { position: fixed; inset: 0; z-index: 1; display: grid; place-items: center; padding: 16px; text-align: center; background: #000b; }
 .overlay.modal { z-index: 3; }

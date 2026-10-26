@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fileUrl, getToken, logout, useMuseum, useUser, type Exhibit, type Museum, type User } from './api'
-import { MuseumView, type Chat } from './Museum'
+import { MuseumView, VIEWS, type Chat, type View } from './Museum'
 import { Admin } from './Admin'
 import { AuthForm } from './Auth'
 
@@ -22,6 +22,13 @@ export default function App() {
 const KIND = { photo: 'Foto', video: 'Video', audio: 'Música', note: 'Nota' }
 let lineKey = 0
 
+// a setting remembered in this browser; if storage is blocked (private mode) it just isn't remembered
+function useSaved(key: string, initial: string) {
+  const [value, setValue] = useState(() => { try { return localStorage.getItem(key) ?? initial } catch { return initial } })
+  const save = (v: string) => { setValue(v); try { localStorage.setItem(key, v) } catch { /* not remembered */ } }
+  return [value, save] as const
+}
+
 function Visit({ museum, user, reload }: { museum: Museum; user: User | null; reload: () => void }) {
   const [floorIdx, setFloorIdx] = useState(0)
   const [locked, setLocked] = useState(false)
@@ -31,6 +38,9 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [login, setLogin] = useState(false)
   const [talking, setTalking] = useState(false)
   const [chat, setChat] = useState<(Chat & { key: number })[]>([])
+  const [saved, setView] = useSaved('view', 'media'), [fps, setFps] = useSaved('fps', 'no')
+  const view: View = saved in VIEWS ? (saved as View) : 'media'
+  const fpsEl = useRef<HTMLDivElement>(null)
   const say = useRef<(text: string) => void>(() => {})
   const onChat = useCallback((m: Chat) => setChat((c) => [...c.slice(-7), { ...m, key: ++lineKey }]), [])
   const floors = museum.floors
@@ -56,7 +66,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
   return (
     <>
-      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} onFloor={setFloorIdx}
+      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} onFloor={setFloorIdx}
         onElevator={setElevator} onPick={setPicked} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
@@ -79,10 +89,19 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
             </form>
           )}
         </div>
+        {fps === 'sí' && <div className="fps" ref={fpsEl} />}
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
           {picked && <div>[E] ver · {picked.caption || KIND[picked.kind]}</div>}
           {elevator && <div>ASCENSOR · piso {current + 1} de {floors.length} · [PgUp] subir · [PgDn] bajar · [1-9] ir directo</div>}
+          {/* in the HUD, not inside #lock: a click there would grab the mouse */}
+          {!locked && !viewing && !login && (
+            <div className="settings">
+              Distancia:
+              {Object.keys(VIEWS).map((v) => <button key={v} className={v === view ? 'sel' : ''} onClick={() => setView(v)}>{v}</button>)}
+              · <button className={fps === 'sí' ? 'sel' : ''} onClick={() => setFps(fps === 'sí' ? 'no' : 'sí')}>FPS</button>
+            </div>
+          )}
         </div>
       </div>
       {!locked && !viewing && !login && (

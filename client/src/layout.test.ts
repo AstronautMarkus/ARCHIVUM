@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, COLUMN, LIFT, SOLID, SPAWN, TILE } from './layout.ts'
+import { atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, trunk, COLUMN, LIFT, SOLID, SPAWN, TILE } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
 const walkable = (c: string) => !SOLID.includes(c)
@@ -36,7 +36,7 @@ test('the ground floor: street, front door, lobby, courtyard and rooms all conne
   assert.equal(tileAt(l, l.door!.x, l.door!.z + 1), 'D')
   assert.equal(tileAt(l, l.court!.fountain.x, l.court!.fountain.z), 'F')
   assert.ok(reachableAll(l))
-  for (const p of l.props) assert.ok('gps'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside, off the street`)
+  for (const p of l.props) assert.ok('gpsT'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside, off the street`)
   assert.ok(l.props.some((p) => p.kind === 'sakura'))
 })
 
@@ -56,13 +56,14 @@ test('the building is the same box on every floor, with the street going all the
   assert.equal(new Set(floors.map((l) => JSON.stringify(l.footprint))).size, 1)
   const [g] = floors, f = g.footprint
   for (const l of floors) assert.ok(l.rooms.flatMap((r) => r.slots).every((s) => s.z > f.z0 * TILE && s.z < (f.z1 + 1) * TILE))
-  // walking straight out from each side: garden walk, garden, sidewalk, street, sidewalk, then the city
-  for (const [tx, tz, dx, dz] of [[f.x0, -1, -1, 0], [f.x1, 3, 1, 0], [9, f.z0, 0, -1], [9, f.z1, 0, 1]]) {
+  // walking straight out from each side: garden walk, garden, sidewalk, street, sidewalk, then the forest to the
+  // west, a house or an alley to the north and the city elsewhere
+  for (const [tx, tz, dx, dz, past] of [[f.x0, -1, -1, 0, '[gT]'], [f.x1, 3, 1, 0, '#'], [9, f.z0, 0, -1, '[#s]'], [9, f.z1, 0, 1, '#']] as const) {
     let way = ''
     for (let k = 1; k <= 10; k++) way += tileAt(g, (tx + dx * k + 0.5) * TILE, (tz + dz * k + 0.5) * TILE)
-    assert.match(way, /^p+g+s+o+s+#$/)
+    assert.match(way, new RegExp(`^p+[gT]+s+o+s+${past}$`))
   }
-  assert.match([...Array(10)].map((_, k) => tileAt(g, -(k + 0.5) * TILE, 7 * TILE)).join(''), /^p+s+o+s+#$/, 'a walk to the door')
+  assert.match([...Array(10)].map((_, k) => tileAt(g, -(k + 0.5) * TILE, 7 * TILE)).join(''), /^p+s+o+s+[gT]$/, 'a walk to the door')
 })
 
 test('columns only block their shaft, so you can walk right up to them', () => {
@@ -92,4 +93,24 @@ test('adding exhibits or rooms never moves existing rooms', () => {
   for (const i of [1, 2]) assert.deepEqual(after[0].rooms[i], before[0].rooms[i])
   assert.deepEqual(after[0].rooms[0].sign, before[0].rooms[0].sign)
   assert.deepEqual(after[1].rooms[0], before[1].rooms[0])
+})
+
+test('past the city: a forest to the west, houses to the north and a shrine in the corner between them', () => {
+  const [g] = buildBuilding([rooms([2, 3, 9])]), s = g.shrine!
+  assert.ok(solidAt(g, s.x, s.z), 'the hall is solid')
+  // from the hall's front, the path runs past the torii out to the street
+  let way = ''
+  for (let k = 0; k < 20; k++) way += tileAt(g, s.x - 1, s.z + s.d / 2 + (k + 0.5) * TILE)
+  assert.match(way, /^p+so/)
+  assert.equal(tileAt(g, s.x - 1, s.gate), 'p')
+  const tiles = g.rows.join('')
+  assert.ok(tiles.split('T').length > 300, 'the forest is full of trees')
+  assert.equal(g.props.filter((p) => p.kind === 'tree' || p.kind === 'oak').length, tiles.split('T').length - 1, 'one tree per tree tile')
+  // a trunk stops you, the rest of its tile doesn't
+  const i = tiles.indexOf('T'), w = g.rows[0].length, tx = (i % w) + g.x0, tz = Math.floor(i / w) + g.z0, t = trunk(tx, tz)
+  assert.ok(solidAt(g, t.x, t.z))
+  assert.ok(!solidAt(g, t.x + COLUMN + 0.1, t.z))
+  // the houses north of the block line alleys you can walk down from the sidewalk
+  assert.equal(tileAt(g, 9.5 * TILE, (g.footprint.z0 - 10.5) * TILE), 's')
+  assert.ok(reachableAll(g))
 })
