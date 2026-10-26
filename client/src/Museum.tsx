@@ -75,7 +75,8 @@ export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, on
     .map((r) => ({ id: r.id, title: r.title, count: byRoom.get(r.id)?.length ?? 0 })))
   const key = JSON.stringify(floors)
   const layouts = useMemo(() => buildBuilding(floors), [key])
-  const sky = useMemo(makeSky, [])
+  // experiment: a painted panorama for the sky; useMemo(makeSky, []) brings back the pixel-art one
+  const sky = useMemo(() => loadSky('/sky.jpg', 20), [])
   const fog = useMemo(() => new THREE.Fog('#000', 3, 24), [])
   return (
     // render at ~240 lines and let CSS scale it up with hard pixels
@@ -105,6 +106,23 @@ function Fps({ el }: { el: RefObject<HTMLElement | null> }) {
     c.frames = c.time = 0
   })
   return null
+}
+
+// a panorama as the sky, lifted `lift` degrees so the city painted in it rises over the 3D one; what it leaves at the
+// bottom is under the ground anyway. three turns it into a cube map once, ignoring offsets, so it's drawn shifted on
+// a canvas that stays empty until then
+function loadSky(url: string, lift: number) {
+  const c = document.createElement('canvas'), img = new Image()
+  c.width = c.height = 0
+  const t = Object.assign(new THREE.CanvasTexture(c), { mapping: THREE.EquirectangularReflectionMapping, colorSpace: THREE.SRGBColorSpace })
+  img.onload = () => {
+    c.width = img.width
+    c.height = img.height
+    c.getContext('2d')!.drawImage(img, 0, -Math.round((img.height * lift) / 180))
+    t.needsUpdate = true
+  }
+  img.src = url
+  return t
 }
 
 // pixel-art city sky as an equirectangular background: blue gradient, clouds, and a skyline with lit windows
