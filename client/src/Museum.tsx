@@ -4,10 +4,12 @@ import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
-  atLiftDoor, buildBuilding, noise, solidAt, tileAt, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H, type Layout, type Prop, type Slot,
+  atLiftDoor, buildBuilding, noise, solidAt, tileAt, CORE_ART, CORE_X0, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H,
+  type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, floorColor, type Exhibit, type Floor, type Museum } from './api'
-import { cantera, ceiling, checker, limestone, railing, spots, whiteBrick } from './textures'
+import { cantera, ceiling, checker, hedge, limestone, pennant, railing, spots, whiteBrick } from './textures'
+import core from './core.json'
 
 const EYE = 1.6
 const GOLD = '#ffcc33'
@@ -18,6 +20,9 @@ const PARAPET = 0.9 // how far the walls around the roof rise above it
 const BEAM = 0.4 // the edge of a floor's slab, seen from the courtyard
 const SPRING = 2.1 // how high above its floor an arch of the courtyard arcade springs from its columns
 const ARCH = 0.5 // how thick the arches are
+const LEDGE = 0.4 // how high the stone ledge at the foot of a window's glass stands
+// the core's paintings, as exhibits so they hang, get picked and open in the viewer like any other
+const CORE_EXHIBITS: Exhibit[] = core.map((e, i) => ({ id: `core${i}`, room: '', author: '', kind: 'photo', thumb: '', text: '', ...e }))
 // the city around the block: storeys and brick of each building, changing every three tiles, so each of the
 // houses north of the block (two tiles square, an alley on every third tile) gets one
 const CITY = [[3, 0], [4, 1], [2, 2], [5, 3], [3, 1], [1, 2], [2, 3], [1, 0]]
@@ -176,6 +181,7 @@ function withWindow(tex: THREE.Texture) {
 
 type Cell = [number, number, number] // tile x, tile z, height of the floor it belongs to
 type Box = [number, number, number, number, number, number] // center x, y, z and size x, y, z
+type Slant = [number, number, string] // tile x, tile z, '\' or '/'
 const OUTDOOR = 'osgpT' // tiles under the open sky
 
 // The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
@@ -185,7 +191,7 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
 }) {
   // the museum is a white gallery with a stone arcade (see textures.ts); Freedoom's art is for the city, the street,
   // the shrine and the elevator
-  const [wall, lobby, ceil, spot, stone, iron] = useMemo(() => [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing()], [])
+  const [wall, lobby, ceil, spot, stone, iron, leaves] = useMemo(() => [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing(), hedge()], [])
   const palette = colors.join()
   const marble = useMemo(() => colors.map(checker), [palette]) // one floor pattern per storey, in its own color
   const [lite, facade, street, sidewalk, door, grass, cobbles, wood, metal, panel, plate, steel,
@@ -211,17 +217,25 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
       rails: [] as Box[], beams: [] as Box[], parapet: [] as Box[], curbs: [] as Box[], paint: [] as Box[],
       floors: layouts.map(() => [] as Cell[]), arches: [] as Arch[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[],
       sidewalk: [] as Cell[], ceiling: [] as Cell[], lights: [] as Cell[],
+      windows: [] as Cell[], panes: [] as Box[], ledges: [] as Box[], hedges: [] as Cell[],
+      core: [] as Cell[], roof: [] as Cell[], crest: [] as Box[], slants: [] as Slant[],
     }
     layouts.forEach((layout, k) => {
-      const y = k * STOREY, roof = k === layouts.length - 1, f = layout.footprint
+      // the block's streets run past the core as well as the building
+      const y = k * STOREY, roof = k === layouts.length - 1, f = { ...layout.footprint, x0: CORE_X0 }
       const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
       layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
         const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz, y], x = (tx + 0.5) * TILE, z = (tz + 0.5) * TILE
+        const core = k === 0 && tx >= CORE_X0 && tx < 0
         if (c === '#') {
           // the city faces the far sidewalk; the museum's walls face its own floors, and outside the skin covers them
           if (AROUND.some(([a, b]) => 'so'.includes(at(tx + a, tz + b)))) t.houses.push(cell)
           else if (SIDES.some(([a, b]) => !('#' + OUTDOOR).includes(at(tx + a, tz + b)))) t.inner.push(cell)
-        } else if (c === 'o') {
+          // the core has no skin: its own walls rise into a parapet around its roof wherever they face outside
+          if (core && AROUND.some(([a, b]) => OUTDOOR.includes(at(tx + a, tz + b)))) t.crest.push([x, WALL_H + PARAPET / 2, z, TILE, PARAPET, TILE])
+        } else if (c === 'h') t.hedges.push(cell)
+        else if (c === '\\' || c === '/') t.slants.push([tx, tz, c])
+        else if (c === 'o') {
           t.street.push(cell)
           // a zebra crossing in front of the door, and elsewhere a dashed line down the middle of the street
           const { door } = layout
@@ -239,8 +253,18 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
         else if (c === 'p') t.path.push(cell)
         else if (c !== 'v' && c !== 'E') { // the courtyard and the elevator shaft stay open all the way up
           ;('.LB'.includes(c) && !(tx & 1) && !(tz & 1) ? t.lights : t.ceiling).push(cell) // a light every other tile
-          t.floors[k].push(cell)
+          // the core keeps its own stone floor whatever color the ground floor gets, and has a roof of its own
+          ;(core ? t.core : t.floors[k]).push(cell)
+          if (core) t.roof.push([tx, tz, WALL_H])
           if (c === 'D') t.doors.push(cell)
+          if (c === 'W') {
+            // a window bay in a west or east wall, under a lintel as high as a doorway's: glass across its outer side
+            // down to a stone ledge, so you step in and look straight out
+            t.windows.push(cell)
+            const out = '.L'.includes(at(tx + 1, tz)) ? -1 : 1, gx = x + out * (TILE / 2 - 0.03)
+            t.panes.push([gx, y + (LEDGE + DOOR_H) / 2, z, 0, DOOR_H - LEDGE, TILE])
+            t.ledges.push([gx - out * 0.08, y + LEDGE / 2, z, 0.15, LEDGE, TILE])
+          }
           if (c === 'C') {
             t.columns.push(cell)
             // an arch on to the next column along the arcade, two to five tiles on with open floor in between
@@ -271,28 +295,41 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
       }))
     })
     // the outside of the museum: a thin skin just outside its outer walls, a box per tile and storey with a window
-    // on every other tile, and a parapet on top, so inside you see your floor's own walls. The front door leaves a
-    // hole in the ground storey, and the north and south sides run past the ends to close the corners
+    // painted on every other tile, and a parapet on top, so inside you see your floor's own walls. Real windows leave
+    // a hole in it, and so does the core where it stands against the ground storey. The north and south sides run
+    // past the ends to close the corners
     const f = ground.footprint, skin = { win: [] as Box[], plain: [] as Box[], parapet: [] as Box[] }
-    const wrap = (tx: number, tz: number, x: number, z: number, sx: number, sz: number) => {
-      const door = tileAt(ground, (tx + 0.5) * TILE, (tz + 0.5) * TILE) === 'D'
-      for (let k = door ? 1 : 0; k < layouts.length; k++) (odd([tx, tz]) ? skin.win : skin.plain).push([x, (k + 0.5) * STOREY, z, sx, STOREY, sz])
+    const wrap = (tx: number, tz: number, [ox, oz]: number[], x: number, z: number, sx: number, sz: number) => {
+      layouts.forEach((l, k) => {
+        if (tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE) === 'W') return
+        if (!k && !OUTDOOR.includes(tileAt(ground, (tx + ox + 0.5) * TILE, (tz + oz + 0.5) * TILE))) return
+        ;(odd([tx, tz]) ? skin.win : skin.plain).push([x, (k + 0.5) * STOREY, z, sx, STOREY, sz])
+      })
       skin.parapet.push([x, top - PARAPET / 2, z, sx, PARAPET, sz])
     }
     for (let tx = f.x0; tx <= f.x1; tx++) {
       const end = tx === f.x0 ? -1 : tx === f.x1 ? 1 : 0
-      wrap(tx, f.z0, (tx + 0.5) * TILE + end * 0.1, f.z0 * TILE - 0.1, TILE + Math.abs(end) * 0.2, 0.2)
-      wrap(tx, f.z1, (tx + 0.5) * TILE + end * 0.1, (f.z1 + 1) * TILE + 0.1, TILE + Math.abs(end) * 0.2, 0.2)
+      wrap(tx, f.z0, [0, -1], (tx + 0.5) * TILE + end * 0.1, f.z0 * TILE - 0.1, TILE + Math.abs(end) * 0.2, 0.2)
+      wrap(tx, f.z1, [0, 1], (tx + 0.5) * TILE + end * 0.1, (f.z1 + 1) * TILE + 0.1, TILE + Math.abs(end) * 0.2, 0.2)
     }
     for (let tz = f.z0; tz <= f.z1; tz++) {
-      wrap(f.x0, tz, f.x0 * TILE - 0.1, (tz + 0.5) * TILE, 0.2, TILE)
-      wrap(f.x1, tz, (f.x1 + 1) * TILE + 0.1, (tz + 0.5) * TILE, 0.2, TILE)
+      wrap(f.x0, tz, [-1, 0], f.x0 * TILE - 0.1, (tz + 0.5) * TILE, 0.2, TILE)
+      wrap(f.x1, tz, [1, 0], (f.x1 + 1) * TILE + 0.1, (tz + 0.5) * TILE, 0.2, TILE)
+    }
+    // a stone cornice around the building at every floor line and on top of the parapet: one band per side, the
+    // east and west ones stopping short of the others so their tops don't flicker against each other
+    const [ax, bx, az, bz] = [f.x0 * TILE - 0.35, (f.x1 + 1) * TILE + 0.35, f.z0 * TILE - 0.35, (f.z1 + 1) * TILE + 0.35]
+    const lines = [...layouts.map((_, k) => (k + 1) * STOREY), top]
+    const cornice = {
+      x: lines.flatMap((y) => [az + 0.2, bz - 0.2].map((z): Box => [(ax + bx) / 2, y + 0.1, z, bx - ax, 0.2, 0.4])),
+      z: lines.flatMap((y) => [ax + 0.2, bx - 0.2].map((x): Box => [x, y + 0.1, (az + bz) / 2, 0.4, 0.2, bz - az - 0.8])),
+      long: [(bx - ax) / TILE, 0.1] as [number, number], wide: [(bz - az) / TILE, 0.1] as [number, number],
     }
     const city = [...Map.groupBy(t.houses, ([tx, tz]) => cityBlock(tx, tz))].map(([i, cells]) => ({
       i, h: CITY[i][0] * STOREY + 0.5, brick: CITY[i][1], win: cells.filter(odd), plain: cells.filter((c) => !odd(c)),
     }))
     const deskZ = t.desk.reduce((s, [, tz]) => s + (tz + 0.5) * TILE, 0) / (t.desk.length || 1)
-    return { ...t, skin, city, deskZ }
+    return { ...t, skin, city, deskZ, cornice }
   }, [layouts, top, ground])
 
   return (
@@ -315,7 +352,15 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
         <Boxes boxes={t.beams} tex={stone} repeat={[1, BEAM / TILE]} />
         <Boxes boxes={t.parapet} tex={stone} repeat={[1, (BEAM + PARAPET) / TILE]} />
         <WallSet cells={t.desk} tex={wood} height={1.1} every={1.1} />
+        <WallSet cells={t.windows} tex={wall} height={WALL_H - DOOR_H} base={DOOR_H} />
+        <Boxes boxes={t.ledges} tex={stone} repeat={[1, LEDGE / TILE]} />
+        <Boxes boxes={t.crest} tex={wall} repeat={[1, PARAPET / STOREY]} />
+        <Boxes boxes={t.cornice.x} tex={stone} repeat={t.cornice.long} />
+        <Boxes boxes={t.cornice.z} tex={stone} repeat={t.cornice.wide} />
+        <Slants cells={t.slants} tex={{ wall, floor: lobby, ceiling: ceil, roof: stone }} />
       </group>
+      <Panes panes={t.panes} />
+      <WallSet cells={t.hedges} tex={leaves} height={1} />
       {/* grass on to the horizon under the edges of the map */}
       <mesh rotation-x={-Math.PI / 2} position-y={-0.05}>
         <planeGeometry args={[1000, 1000]} />
@@ -324,17 +369,20 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
       <Boxes boxes={t.curbs} tex={facade} repeat={[1, 0.15 / TILE]} />
       <Boxes boxes={t.paint} tex={paint} />
       {t.floors.map((cells, k) => <TileSet key={k} cells={cells} tex={marble[k]} />)}
+      <TileSet cells={t.core} tex={lobby} />
+      <TileSet cells={t.roof} tex={stone} />
       <TileSet cells={t.grass} tex={grass} />
       <TileSet cells={t.path} tex={cobbles} />
       <TileSet cells={t.street} tex={street} />
       <TileSet cells={t.sidewalk} tex={sidewalk} />
       <TileSet cells={t.ceiling} tex={ceil} y={WALL_H - 0.005} />
       <TileSet cells={t.lights} tex={spot} y={WALL_H - 0.005} />
+      <TileSet cells={t.windows} tex={ceil} y={DOOR_H - 0.005} />
       {t.doors.map(([tx, tz, y]) => tx === 0 && y === 0
         ? <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} soffit={ceil} top={STOREY} />
         : <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} soffit={ceil} top={WALL_H} />)}
       {ground.door && <FrontDoor at={ground.door} tex={door} />}
-      {ground.entrance && <Entrance at={ground.entrance} floors={layouts.length} tex={{ stone: lobby, trim: stone, iron, door }} />}
+      {ground.entrance && <Entrance at={ground.entrance} tex={{ stone: lobby, trim: stone, iron, door }} />}
       {t.desk.length > 0 && (
         <Text position={[TILE + 0.03, 2.2, t.deskZ]} rotation-y={Math.PI / 2} fontSize={0.6} {...TITLE}>RECEPCIÓN</Text>
       )}
@@ -358,6 +406,11 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
         </group>
       ))}
       <group name="exhibits">
+        {near(0) && CORE_ART.map((slot, i) => CORE_EXHIBITS[i] && (
+          <Suspense key={i} fallback={null}>
+            <ExhibitView ex={CORE_EXHIBITS[i]} slot={slot} quiet={quiet} />
+          </Suspense>
+        ))}
         {layouts.map((layout, k) => near(k) && (
           <group key={k} position-y={k * STOREY}>
             {layout.rooms.flatMap((r) => (byRoom.get(r.id) ?? []).map((ex, i) => (
@@ -378,7 +431,7 @@ function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE, fog 
   cells: Cell[]; tex: THREE.Texture; height: number; base?: number; every?: number; size?: number; fog?: boolean
 }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
-  const map = useTiled(tex, 1, height / every)
+  const map = useTiled(tex, 1, height / every, base / every) // starting up off the floor, the bricks carry on from below
   useLayoutEffect(() => {
     const m = new THREE.Matrix4()
     cells.forEach(([tx, tz, y], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, y + base + height / 2, (tz + 0.5) * TILE)))
@@ -531,6 +584,46 @@ function Boxes({ boxes, tex, repeat = [1, 1], cut = false }: { boxes: Box[]; tex
   )
 }
 
+// window glass, placed and sized like Boxes but flat, across x (their x size is ignored)
+function Panes({ panes }: { panes: Box[] }) {
+  const ref = useRef<THREE.InstancedMesh>(null!)
+  const geometry = useMemo(() => new THREE.PlaneGeometry().rotateY(Math.PI / 2), [])
+  useLayoutEffect(() => {
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), at = new THREE.Vector3(), size = new THREE.Vector3()
+    panes.forEach(([x, y, z, , sy, sz], i) => ref.current.setMatrixAt(i, m.compose(at.set(x, y, z), q, size.set(1, sy, sz))))
+    ref.current.instanceMatrix.needsUpdate = true
+    ref.current.computeBoundingSphere()
+  }, [panes])
+  return (
+    <instancedMesh ref={ref} args={[geometry, undefined, panes.length]}>
+      <meshBasicMaterial {...GLASS} />
+    </instancedMesh>
+  )
+}
+
+// the core's slanted walls: a thin wall from corner to corner of each tile, up into the parapet, and the floor,
+// ceiling and roof of the tile's inside half, so its outside half stays garden. Few and fixed, so one mesh per part
+function Slants({ cells, tex }: { cells: Slant[]; tex: Record<'wall' | 'floor' | 'ceiling' | 'roof', THREE.Texture> }) {
+  const h = WALL_H + PARAPET, long = TILE * Math.SQRT2 + 0.2 // a hair longer, to tuck into the walls at either end
+  const parts = useMemo(() => {
+    const half = (y: number) => mergeGeometries(cells.map(([tx, tz, c]) => {
+      const corners = c === '\\' ? [[0, 0], [1, 0], [1, 1]] : [[1, 0], [1, 1], [0, 1]] // the inside: north-east or south-east
+      return new THREE.BufferGeometry()
+        .setAttribute('position', new THREE.Float32BufferAttribute(corners.flatMap(([u, v]) => [(tx + u) * TILE, y, (tz + v) * TILE]), 3))
+        .setAttribute('uv', new THREE.Float32BufferAttribute(corners.flat(), 2))
+    }))
+    const wall = mergeGeometries(cells.map(([tx, tz, c]) => new THREE.BoxGeometry(long, h, 0.2)
+      .rotateY(c === '\\' ? -Math.PI / 4 : Math.PI / 4).translate((tx + 0.5) * TILE, h / 2, (tz + 0.5) * TILE)))
+    return { wall, floor: half(0.005), ceiling: half(WALL_H - 0.005), roof: half(WALL_H + 0.005) }
+  }, [cells, h, long])
+  const maps = {
+    wall: useTiled(tex.wall, long / TILE, h / TILE), floor: useTiled(tex.floor), ceiling: useTiled(tex.ceiling), roof: useTiled(tex.roof),
+  }
+  return (['wall', 'floor', 'ceiling', 'roof'] as const).map((k) => (
+    <mesh key={k} geometry={parts[k]}><meshBasicMaterial map={maps[k]} side={THREE.DoubleSide} /></mesh>
+  ))
+}
+
 // round stone columns: a square base, the shaft, a capital flaring out to carry the arches and a pier over it up
 // to the floor above, all in one instanced mesh. The base is as wide as what stops you (COLUMN)
 type Arch = [number, number, number, number, number] // center x, floor y, center z, span in tiles, 1 if it runs along x
@@ -589,60 +682,86 @@ function ArchSet({ n, spans, map }: { n: number; spans: Arch[]; map: THREE.Textu
   )
 }
 
-// The entrance pavilion, standing out from the facade like a little tower: two solid piers and two stone columns
-// hold up a block that rises with the building and a bit above its roof, the museum's name on its frieze. With two
-// floors or more the columns stand two storeys tall in front of a balcony, like a national museum's portico
-const ATTIC = 2.6 // how far the entrance rises above the roof
-function Entrance({ at, floors, tex }: {
-  at: NonNullable<Layout['entrance']>; floors: number; tex: Record<'stone' | 'trim' | 'iron' | 'door', THREE.Texture>
-}) {
-  const { x, z, w, d, columns } = at
-  const back = x + d - 0.2, depth = back - x, mid = (x + back) / 2 // it meets the facade's skin at the back
-  const open = Math.min(2, floors) * STOREY, crown = floors * STOREY + PARAPET + ATTIC, porch = w - 2 * TILE // between the piers
+// The entrance tower, standing in the core's waist between its slanted walls: two solid piers and two stone columns
+// two storeys tall hold up a block with the museum's name on its frieze, over a balcony. It stands the same height
+// however many floors the museum has. Its back wall rests on the core's wall over the front door, which slides up
+// into it, and rises over the core's roof. Banners hang on the piers and flags fly out in the garden
+const OPEN = 2 * STOREY, TOWER = 4 * STOREY // how high the porch is open, and the top of the tower
+function Entrance({ at, tex }: { at: NonNullable<Layout['entrance']>; tex: Record<'stone' | 'trim' | 'iron' | 'door', THREE.Texture> }) {
+  const { x, z, w, d, columns, flags } = at
+  const back = x + d + TILE, depth = back - x, mid = (x + back) / 2, porch = w - 2 * TILE // between the piers
   const win = useMemo(() => withWindow(tex.stone), [tex.stone])
-  const front = useTiled(win, w / TILE, (crown - open) / STOREY), side = useTiled(tex.stone, depth / TILE, (crown - open) / TILE)
-  const floor = useTiled(tex.stone, depth / TILE, porch / TILE), door = useTiled(tex.door)
+  const front = useTiled(win, w / TILE, (TOWER - OPEN) / STOREY), side = useTiled(tex.stone, depth / TILE, (TOWER - OPEN) / TILE)
+  const rear = useTiled(tex.stone, w / TILE, (OPEN - WALL_H) / TILE)
+  const floor = useTiled(tex.stone, d / TILE, porch / TILE), door = useTiled(tex.door)
+  const [banner, flag] = useMemo(() => [pennant(16, 48), pennant(32, 20)], [])
   const column = useMemo(() => mergeGeometries([
     square(0.45, 0.42, 0.45, 0),
-    new THREE.CylinderGeometry(0.32, 0.36, open - 0.95, 12).translate(0, 0.45 + (open - 0.95) / 2, 0),
-    square(0.3, 0.5, 0.5, open - 0.5),
-  ]), [open])
-  const piers = useMemo(() => [-1, 1].map((s): Box => [mid, open / 2, z + s * (w / 2 - TILE / 2), depth, open, TILE]), [mid, open, z, w, depth])
-  const trim = useMemo(() => {
-    const boxes: Box[] = [
-      [x - 0.1, open + 0.6, z, 0.3, 1.2, w + 0.2], // the frieze
-      [x - 0.15, open + 1.3, z, 0.7, 0.2, w + 0.7], // the cornice over it
-      [mid - 0.1, crown + 0.1, z, depth + 0.6, 0.2, w + 0.6], // the crowning cornice
-      [x - 0.3, 0.06, z, 0.6, 0.12, porch], // a step up into the porch
-    ]
-    if (floors > 1) boxes.push([(x + 1.4 + back) / 2, STOREY - 0.15, z, back - x - 1.4, 0.3, porch]) // the balcony
-    return boxes
-  }, [x, z, w, mid, back, depth, open, crown, porch, floors])
-  const rail = useMemo((): Box[] => (floors > 1 ? [[x + 1.4, STOREY + 0.5, z, 0.06, 1, porch]] : []), [x, z, porch, floors])
+    new THREE.CylinderGeometry(0.32, 0.36, OPEN - 0.95, 12).translate(0, 0.45 + (OPEN - 0.95) / 2, 0),
+    square(0.3, 0.5, 0.5, OPEN - 0.5),
+  ]), [])
+  const piers = useMemo(() => [-1, 1].map((s): Box => [x + d / 2, OPEN / 2, z + s * (w / 2 - TILE / 2), d, OPEN, TILE]), [x, d, z, w])
+  const trim = useMemo((): Box[] => [
+    [x - 0.1, OPEN + 0.6, z, 0.3, 1.2, w + 0.2], // the frieze
+    [x - 0.15, OPEN + 1.3, z, 0.7, 0.2, w + 0.7], // the cornice over it
+    [mid - 0.1, TOWER + 0.1, z, depth + 0.6, 0.2, w + 0.6], // the crowning cornice
+    [x - 0.3, 0.06, z, 0.6, 0.12, porch], // a step up into the porch
+    [x + (1.4 + d) / 2, STOREY - 0.15, z, d - 1.4, 0.3, porch], // the balcony
+  ], [x, z, w, d, mid, depth, porch])
+  const rail = useMemo((): Box[] => [[x + 1.4, STOREY + 0.5, z, 0.06, 1, porch]], [x, z, porch])
   return (
     <>
-      <Boxes boxes={piers} tex={tex.stone} repeat={[1, open / TILE]} />
+      <Boxes boxes={piers} tex={tex.stone} repeat={[1, OPEN / TILE]} />
       <Boxes boxes={trim} tex={tex.trim} />
       <Boxes boxes={rail} tex={tex.iron} cut />
       {/* the block over the porch: windows on its front, plain stone elsewhere, the porch's ceiling underneath */}
-      <mesh position={[mid, (open + crown) / 2, z]}>
-        <boxGeometry args={[depth, crown - open, w]} />
+      <mesh position={[mid, (OPEN + TOWER) / 2, z]}>
+        <boxGeometry args={[depth, TOWER - OPEN, w]} />
         {[side, front, side, side, side, side].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
       </mesh>
+      {/* the back wall under it, a hair bigger than the core's parapet it swallows */}
+      <mesh position={[back - TILE / 2, (WALL_H + OPEN) / 2, z]}>
+        <boxGeometry args={[TILE + 0.1, OPEN - WALL_H, w + 0.1]} />
+        <meshBasicMaterial map={rear} />
+      </mesh>
       {columns.map((c) => <mesh key={c.z} geometry={column} position={[c.x, 0, c.z]}><meshBasicMaterial map={tex.trim} /></mesh>)}
-      <mesh position={[mid, 0.02, z]} rotation-x={-Math.PI / 2}>
-        <planeGeometry args={[depth, porch]} />
+      <mesh position={[x + d / 2, 0.02, z]} rotation-x={-Math.PI / 2}>
+        <planeGeometry args={[d, porch]} />
         <meshBasicMaterial map={floor} />
       </mesh>
-      {/* two more doors either side of the real one, for show, tall enough to hide the skin's windows behind them */}
+      {/* two more doors either side of the real one, for show */}
       {[-1, 1].map((s) => (
-        <mesh key={s} position={[back - 0.01, 1.5, z + s * 3]} rotation-y={-Math.PI / 2}>
+        <mesh key={s} position={[x + d - 0.01, 1.5, z + s * 3]} rotation-y={-Math.PI / 2}>
           <planeGeometry args={[1.4, 3]} />
           <meshBasicMaterial map={door} />
         </mesh>
       ))}
-      <Text position={[x - 0.26, open + 0.6, z]} rotation-y={-Math.PI / 2} fontSize={0.75} {...TITLE}>ARCHIVUM</Text>
+      {[-1, 1].map((s) => (
+        <mesh key={s} position={[x - 0.03, 4.2, z + s * (w / 2 - TILE / 2)]} rotation-y={-Math.PI / 2}>
+          <planeGeometry args={[1.2, 3.6]} />
+          <meshBasicMaterial map={banner} />
+        </mesh>
+      ))}
+      {flags.map((f) => <Flag key={f.z} at={f} tex={flag} />)}
+      <Text position={[x - 0.26, OPEN + 0.6, z]} rotation-y={-Math.PI / 2} fontSize={0.75} {...TITLE}>ARCHIVUM</Text>
     </>
+  )
+}
+
+// a flagpole with a gilt ball on top and its flag flying toward +z, a wave running down it from the pole
+function Flag({ at, tex }: { at: { x: number; z: number }; tex: THREE.Texture }) {
+  const geometry = useMemo(() => new THREE.PlaneGeometry(1.8, 1.1, 8, 1).translate(0.9, 0, 0), [])
+  useFrame(({ clock }) => {
+    const p = geometry.attributes.position as THREE.BufferAttribute
+    for (let i = 0; i < p.count; i++) p.setZ(i, Math.sin(p.getX(i) * 3 - clock.elapsedTime * 4 + at.z) * 0.08 * p.getX(i))
+    p.needsUpdate = true
+  })
+  return (
+    <group position={[at.x, 0, at.z]}>
+      <mesh position-y={3.5}><cylinderGeometry args={[0.05, 0.07, 7, 6]} /><meshBasicMaterial color="#d8d8d8" /></mesh>
+      <mesh position-y={7.05}><sphereGeometry args={[0.1, 6, 4]} /><meshBasicMaterial color={GILT} /></mesh>
+      <mesh geometry={geometry} position-y={6.35} rotation-y={-Math.PI / 2}><meshBasicMaterial map={tex} side={THREE.DoubleSide} /></mesh>
+    </group>
   )
 }
 
@@ -679,7 +798,7 @@ function FrontDoor({ at, tex }: { at: NonNullable<Layout['door']>; tex: THREE.Te
       s.play().catch(() => {}) // blocked until the first click
     }
     frontDoor.open = THREE.MathUtils.clamp(frontDoor.open + (now ? 2.5 : -2.5) * Math.min(dt, 0.1), 0, 1)
-    ref.current.position.y = DOOR_H / 2 + frontDoor.open * DOOR_H
+    ref.current.position.y = DOOR_H / 2 + frontDoor.open * (DOOR_H + 0.02) // open, clear of the lintel's underside
   })
   return (
     <mesh ref={ref} position={[at.x, DOOR_H / 2, at.z]}>
@@ -1071,7 +1190,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick }: {
         return car.at === here && car.doors >= 0.9 && atLiftDoor(ox, oz) && Math.abs(z - LIFT.z) < LIFT.door / 2
       }
       if (inside) return true
-      if (here === 0 && x < TILE && tileAt(l, x, z) === 'D' && frontDoor.open < 0.8) return false
+      if (l.door && Math.abs(x - l.door.x) < TILE / 2 && tileAt(l, x, z) === 'D' && frontDoor.open < 0.8) return false
       return !solidAt(l, x, z)
     }
     const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => open(x + a, z + b))
@@ -1094,9 +1213,11 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick }: {
     const elevator = inCar()
     if (elevator !== last.current.elevator) onElevator((last.current.elevator = elevator))
 
-    // outside the fog turns into a light haze; inside it's Doom darkness, kept far enough that the sunny
-    // courtyard doesn't look like night from the corridors around it. How far each reaches is the chosen view's
-    const v = VIEWS[view], out = OUTDOOR.includes(at(p.x, p.z)), fog = scene.fog as THREE.Fog, lerp = Math.min(1, dt * 3)
+    // outside the fog turns into a light haze, and so it does at a window, where you look out; inside it's Doom
+    // darkness, kept far enough that the sunny courtyard doesn't look like night from the corridors around it. How
+    // far each reaches is the chosen view's
+    const atWindow = [[0, 0], ...SIDES].some(([a, b]) => at(p.x + a * TILE, p.z + b * TILE) === 'W')
+    const v = VIEWS[view], out = OUTDOOR.includes(at(p.x, p.z)) || atWindow, fog = scene.fog as THREE.Fog, lerp = Math.min(1, dt * 3)
     const [near, far] = out ? v.out : v.in
     fog.color.lerp(out ? haze : DARK, lerp)
     fog.near += (near - fog.near) * lerp

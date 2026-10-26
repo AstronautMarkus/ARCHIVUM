@@ -10,6 +10,12 @@ server/   Flask + MongoDB. Cuentas, permisos, subidas, miniaturas y un WebSocket
 
 Arte: el museo (ladrillo blanco, concreto, cantera, fierro) se pinta en código en `client/src/textures.ts`; la ciudad, la calle, el santuario y los sprites son de [Freedoom](https://freedoom.github.io) (licencia BSD, ver `client/public/doom/LICENSE-freedoom.txt`).
 
+## El núcleo
+
+Entre la torre de entrada y el lobby está el núcleo: una galería de un piso con la forma de un plano real (ala norte con la esquina cortada, una cintura donde va la torre, una sala al suroeste y otra al este). No crece con el museo; su plano es el mapa `CORE` de `client/src/layout.ts`.
+
+Sus cuadros están en `client/src/core.json` (`file` y `caption`) y las imágenes en `client/public/core/`. Cada `*` del mapa es un muro con un cuadro en cada cara que da al piso; se llenan en orden de lectura (de arriba abajo y de izquierda a derecha). Los que vienen son pinturas de dominio público bajadas de Wikimedia Commons.
+
 ## Correr en local
 
 Necesitas MongoDB corriendo en `localhost:27017` (o apunta `MONGO_URL` a tu base).

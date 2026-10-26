@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, trunk, COLUMN, LIFT, SOLID, SPAWN, TILE, TORII } from './layout.ts'
+import {
+  atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, LIFT, SOLID, SPAWN, TILE, TORII,
+} from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
 const walkable = (c: string) => !SOLID.includes(c)
@@ -36,7 +38,7 @@ test('the ground floor: street, front door, lobby, courtyard and rooms all conne
   assert.equal(tileAt(l, l.door!.x, l.door!.z + 1), 'D')
   assert.equal(tileAt(l, l.court!.fountain.x, l.court!.fountain.z), 'F')
   assert.ok(reachableAll(l))
-  for (const p of l.props) assert.ok('gpsT'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside, off the street`)
+  for (const p of l.props) assert.ok('gpsT.'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands off the street`)
   assert.ok(l.props.some((p) => p.kind === 'sakura'))
   // the entrance: a column either side of the way in, solid piers at its ends
   const e = l.entrance!
@@ -61,14 +63,14 @@ test('the building is the same box on every floor, with the street going all the
   assert.equal(new Set(floors.map((l) => JSON.stringify(l.footprint))).size, 1)
   const [g] = floors, f = g.footprint
   for (const l of floors) assert.ok(l.rooms.flatMap((r) => r.slots).every((s) => s.z > f.z0 * TILE && s.z < (f.z1 + 1) * TILE))
-  // walking straight out from each side: garden walk, garden, sidewalk, street, sidewalk, then the forest to the
-  // west, a house or an alley to the north and the city elsewhere
-  for (const [tx, tz, dx, dz, past] of [[f.x0, -1, -1, 0, '[gT]'], [f.x1, 3, 1, 0, '#'], [9, f.z0, 0, -1, '[#s]'], [9, f.z1, 0, 1, '#']] as const) {
+  // walking straight out from each side (the core's to the west): garden walk, garden, hedge, sidewalk, street,
+  // sidewalk, then the forest to the west, a house or an alley to the north and the city elsewhere
+  for (const [tx, tz, dx, dz, past] of [[CORE_X0, -1, -1, 0, '[gT]'], [f.x1, -1, 1, 0, '#'], [9, f.z0, 0, -1, '[#s]'], [9, f.z1, 0, 1, '#']] as const) {
     let way = ''
     for (let k = 1; k <= 10; k++) way += tileAt(g, (tx + dx * k + 0.5) * TILE, (tz + dz * k + 0.5) * TILE)
-    assert.match(way, new RegExp(`^p+[gT]+s+o+s+${past}$`))
+    assert.match(way, new RegExp(`^p+[gT]+hs+o+s+${past}$`))
   }
-  assert.match([...Array(10)].map((_, k) => tileAt(g, -(k + 0.5) * TILE, 7 * TILE)).join(''), /^p+s+o+s+[gT]$/, 'a walk to the door')
+  assert.match([...Array(10)].map((_, k) => tileAt(g, (CORE_X0 - k - 0.5) * TILE, 7 * TILE)).join(''), /^p+s+o+s+[gT]$/, 'a walk to the door')
 })
 
 test('nothing stands in the ring around the courtyard: open on the ground floor, balconies upstairs', () => {
@@ -133,4 +135,44 @@ test('every prop stops you where it stands, and every tile a post reaches into k
       assert.equal(g.posts.get(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`), p, 'and no other post took that tile')
     }
   }
+})
+
+test('the core stays the same however the museum grows, and leads from the street through the tower to the lobby', () => {
+  const core = (l: ReturnType<typeof buildFloor>) => CORE.map((row, i) => [...row].map((_, j) => tileAt(l, (CORE_X0 + j + 0.5) * TILE, (CORE_Z0 + i + 0.5) * TILE)).join(''))
+  const [small] = buildBuilding([rooms([])]), [big] = buildBuilding([rooms([40, 40, 9, 9, 9, 9, 9]), rooms([1]), rooms([1])])
+  assert.deepEqual(core(small), core(big))
+  let way = ''
+  for (let tx = -20; tx <= 2; tx++) way += tileAt(big, (tx + 0.5) * TILE, 7.5 * TILE)
+  assert.match(way, /^o+s+p+D\.+D\.+DL+$/, 'street, garden walk, porch, front door, hall, east room, lobby')
+  assert.ok(solidAt(big, big.door!.x, big.door!.z - 2.5) && solidAt(big, big.door!.x, big.door!.z + 2.5), 'the front door is two tiles wide')
+  // every painting hangs on a wall, over floor, and none on another's spot
+  assert.equal(CORE_ART.length, 17)
+  assert.equal(new Set(CORE_ART.map((s) => `${s.x},${s.z}`)).size, CORE_ART.length)
+  for (const s of CORE_ART) {
+    const nx = Math.sin(s.rot) * 0.2, nz = Math.cos(s.rot) * 0.2
+    assert.equal(tileAt(big, s.x + nx, s.z + nz), '.')
+    assert.equal(tileAt(big, s.x - nx, s.z - nz), '#')
+  }
+  // a slanted wall stops you on its outer (west) half only
+  const upper = (CORE_X0 + 1 + 0.5) * TILE, lower = (CORE_X0 + 1 + 0.5) * TILE
+  assert.ok(solidAt(big, upper - 0.5, (CORE_Z0 + 4 + 0.5) * TILE + 0.5) && !solidAt(big, upper + 0.5, (CORE_Z0 + 4 + 0.5) * TILE - 0.5))
+  assert.ok(solidAt(big, lower - 0.5, (CORE_Z0 + 13 + 0.5) * TILE - 0.5) && !solidAt(big, lower + 0.5, (CORE_Z0 + 13 + 0.5) * TILE + 0.5))
+})
+
+test('real windows at both ends of every floor, every other tile, only where there is open air outside', () => {
+  const [g, up] = buildBuilding([rooms([2]), rooms([])])
+  for (const l of [g, up]) {
+    const f = l.footprint, at = (tx: number, tz: number) => tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
+    for (let tz = 0; tz <= 13; tz++) {
+      assert.equal(at(f.x1, tz) === 'W', (f.x1 + tz) % 2 === 1, 'east end')
+      const open = l === up || 'ghpT'.includes(at(f.x0 - 1, tz))
+      assert.equal(at(f.x0, tz) === 'W', open && tz % 2 === 1, 'west end')
+      // you step into the bay, but not out through its glass
+      for (const [tx, out] of [[f.x0, -1], [f.x1, 1]]) {
+        if (at(tx, tz) === 'W') assert.ok(!solidAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE) && solidAt(l, (tx + out + 0.5) * TILE, (tz + 0.5) * TILE))
+      }
+    }
+    assert.ok(reachableAll(l))
+  }
+  assert.ok([1, 3].every((tz) => tileAt(g, 0.5 * TILE, (tz + 0.5) * TILE) === 'W'), 'downstairs, onto the garden by the core')
 })

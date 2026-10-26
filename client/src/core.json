@@ -1,0 +1,19 @@
+[
+  { "file": "/core/meninas.jpg", "caption": "Las Meninas · Diego Velázquez, 1656" },
+  { "file": "/core/ronda-de-noche.jpg", "caption": "La ronda de noche · Rembrandt, 1642" },
+  { "file": "/core/jardin-delicias.jpg", "caption": "El jardín de las delicias · El Bosco, c. 1500" },
+  { "file": "/core/venus.jpg", "caption": "El nacimiento de Venus · Sandro Botticelli, c. 1485" },
+  { "file": "/core/joven-perla.jpg", "caption": "La joven de la perla · Johannes Vermeer, c. 1665" },
+  { "file": "/core/arnolfini.jpg", "caption": "El matrimonio Arnolfini · Jan van Eyck, 1434" },
+  { "file": "/core/caminante.jpg", "caption": "El caminante sobre el mar de nubes · Caspar David Friedrich, 1818" },
+  { "file": "/core/tres-de-mayo.jpg", "caption": "El 3 de mayo en Madrid · Francisco de Goya, 1814" },
+  { "file": "/core/gran-ola.jpg", "caption": "La gran ola de Kanagawa · Katsushika Hokusai, c. 1831" },
+  { "file": "/core/kameido.jpg", "caption": "El jardín de ciruelos en Kameido · Utagawa Hiroshige, 1857" },
+  { "file": "/core/gioconda.jpg", "caption": "La Gioconda · Leonardo da Vinci, c. 1503" },
+  { "file": "/core/noche-estrellada.jpg", "caption": "La noche estrellada · Vincent van Gogh, 1889" },
+  { "file": "/core/beso.jpg", "caption": "El beso · Gustav Klimt, 1908" },
+  { "file": "/core/valle-de-mexico.jpg", "caption": "El Valle de México desde el cerro de Santa Isabel · José María Velasco, 1875" },
+  { "file": "/core/moulin-galette.jpg", "caption": "Baile en el Moulin de la Galette · Pierre-Auguste Renoir, 1876" },
+  { "file": "/core/cazadores.jpg", "caption": "Cazadores en la nieve · Pieter Bruegel el Viejo, 1565" },
+  { "file": "/core/grande-jatte.jpg", "caption": "Tarde de domingo en la isla de La Grande Jatte · Georges Seurat, 1884" }
+]

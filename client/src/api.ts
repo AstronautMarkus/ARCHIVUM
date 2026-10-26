@@ -33,7 +33,8 @@ export async function api<T = unknown>(path: string, { json, ...init }: RequestI
   return data as T
 }
 
-export const fileUrl = (e: Exhibit, thumb?: boolean) => `/files/${thumb && e.thumb ? e.thumb : e.file}`
+// the core's art (core.json) ships with the client under an absolute path; everything else was uploaded
+export const fileUrl = (e: Exhibit, thumb?: boolean) => (e.file.startsWith('/') ? e.file : `/files/${thumb && e.thumb ? e.thumb : e.file}`)
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 // the whole museum; reload() runs again when the server pushes a change

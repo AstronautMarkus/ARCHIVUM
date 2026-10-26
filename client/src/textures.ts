@@ -127,3 +127,23 @@ export const railing = () => texture(64, 32, (g) => {
   g.fillRect(0, 29, 64, 3)
   for (let x = 2; x < 64; x += 5) g.fillRect(x, 3, 1, 26)
 })
+
+// a clipped hedge: dark leaves, the lighter ones catching the sun
+export const hedge = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#21402a'
+  g.fillRect(0, 0, 64, 64)
+  speckle(g, rand, 1400, ['#2d5a35', '#3c7040', '#183222', '#4a8a3c', '#5f9e47'])
+})
+
+// the museum's cloth for flags and banners, w x h px: deep red in a gold border, with a gold A
+export const pennant = (w: number, h: number) => texture(w, h, (g) => {
+  g.fillStyle = '#d6a419'
+  g.fillRect(0, 0, w, h)
+  g.fillStyle = '#8f1d1d'
+  g.fillRect(1, 1, w - 2, h - 2)
+  g.fillStyle = '#d6a419'
+  g.font = `bold ${Math.min(w, h) - 6}px serif`
+  g.textAlign = 'center'
+  g.textBaseline = 'middle'
+  g.fillText('A', w / 2, Math.min(w, h) / 2 + 1)
+})

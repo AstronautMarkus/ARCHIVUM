@@ -1,10 +1,11 @@
 // Turns the museum into tile maps, one per floor; floors stack WALL_H apart. Tile (tx, tz) covers
 // world [tx*TILE, (tx+1)*TILE). Every floor is a school-like ring: a lobby at the west end, corridors along the
 // north and south sides of a central courtyard, and the rooms outside the corridors.
-// The building is the same box on every floor and stands in the middle of its city block: on the ground floor a
-// garden, a sidewalk and a street go all the way around it, with the city beyond. You come in from the street
-// through the lobby, which has the reception desk, and the courtyard has grass, paths, a fountain and cherry
-// trees. Upper floors look down into it from balconies.
+// The building is the same box on every floor and stands in the middle of its city block with the core in front of
+// it, a one-storey gallery of famous paintings that never changes; on the ground floor a garden behind a hedge, a
+// sidewalk and a street go all the way around both, with the city beyond. You come in from the street through the
+// entrance tower and the core to the lobby, which has the reception desk, and the courtyard has grass, paths, a
+// fountain and cherry trees. Upper floors look down into it from balconies, and out through real windows at both ends.
 // Past the city to the west there's a forest, to the north a neighbourhood of houses along alleys, and in the
 // corner between them a little shrine; the street on the block's north side runs on west between shrine and forest.
 // A glass elevator rides up and down the courtyard's west edge, its doors opening onto the lobby of each floor.
@@ -15,16 +16,42 @@ export const WALL_H = 3.5 // also one storey: floors stack with no gap
 export const DOOR_H = 2.2
 export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE } // a safe spot in the lobby, on every floor
 // wall, fountain, reception desk, courtyard void, 'H' a block drawn by its own component (the shrine's hall, the
-// entrance's piers); posts and the elevator are special
-export const SOLID = '#FRvH'
+// entrance's piers), hedge; posts, the elevator and the core's slanted walls are special
+export const SOLID = '#FRvHh'
 export const MAX_FLOORS = 99
 export const COLUMN = 0.35 // half the width of a column
 export const TORII = 2.3 // how far each pillar of the shrine's torii stands from the middle of its path
 // what stops you around each prop, as half the width of its trunk, post or base
 const BODY = { tree: COLUMN, oak: COLUMN, sakura: 0.25, statue: 0.45, lamp: 0.2, light: 0.25 }
-const LANTERN = 0.3, PILLAR = 0.25 // the shrine's stone lanterns and the torii's pillars
-// the entrance stands out this many tiles from the facade; its two columns stand this far in from its front, this thick
+const LANTERN = 0.3, PILLAR = 0.25, FLAGPOLE = 0.15 // the shrine's stone lanterns, the torii's pillars, flagpoles
+// the entrance's porch is this many tiles deep; its two columns stand this far in from its front, this thick
 const PORCH = 2, PORTICO = 0.8, SHAFT = 0.4
+// The core, drawn after a real museum's plan: a north wing with its corner cut, a waist where the entrance tower
+// stands between two slanted walls, a room south-west and one east. Columns CORE_X0..-1 (the building's west wall is
+// its east wall), rows CORE_Z0 on, always inside the building's rows. '*' is a wall with a frame on each side that
+// faces floor, hung from core.json in reading order; '\' and '/' are walls from corner to corner of their tile, solid
+// on its west half; 'H' and 'p' the tower's piers and porch, 'g' garden. It never grows.
+export const CORE = [
+  '##*#*#*#*##ggg',
+  '#.........#ggg',
+  '*.........*ggg',
+  '#.........#ggg',
+  'g\\........#ggg',
+  'gg\\.......*ggg',
+  'HH#.......#ggg',
+  'pp#....##*##*#',
+  'ppD....D......',
+  'ppD....D......',
+  'pp#....#......',
+  'HH#....*......',
+  'gg/....#......',
+  'g/.....#......',
+  '#......D......',
+  '*......D......',
+  '#......#......',
+  '##*##*###*##*#',
+]
+export const CORE_X0 = -CORE[0].length, CORE_Z0 = -2
 // the elevator shaft: two tiles wide on the courtyard's west edge, beside the entrance axis (rows 6-7) so walking
 // in from the street you see straight into the courtyard; its doors face the lobby. z: center, w: width along z,
 // door: width of the opening, which leaves room on both sides for the open doors to slide away
@@ -36,6 +63,7 @@ const RING_END = 13, COURT_Z0 = 3, COURT_Z1 = 10, LOBBY_X1 = 5, COURT_X0 = 7
 // sidewalk, the street and the far sidewalk; past that, the city
 const BLOCK = 'pgggsooos'
 const NEAR = BLOCK.indexOf('s') + 1, FAR = BLOCK.length // the block's near and far sidewalks, by how far out
+const HEDGE = BLOCK.lastIndexOf('g') + 1 // the garden's outer edge, where its hedge and gate are
 // how far the forest and the shrine reach west of the city, and the shrine and the houses north of it, in tiles
 const WILD = 20
 
@@ -46,8 +74,9 @@ export type Post = { x: number; z: number; r: number }
 export type Prop = { kind: 'tree' | 'oak' | 'lamp' | 'sakura' | 'statue' | 'light'; x: number; z: number; s?: number } // s: scale
 export type Layout = {
   // rows[tz - z0][tx - x0]: SOLID tiles, '.' floor, 'L' lobby, 'D' doorway, 'C' column, 'E' elevator shaft,
-  // 'B' balcony (floor with a railing on its courtyard side), and under the open sky 'o' street, 's' sidewalk,
-  // 'g' grass, 'p' path, 'T' grass with a tree on it
+  // 'B' balcony (floor with a railing on its courtyard side), 'W' a window you step into, glazed on its outer side,
+  // '\' and '/' the core's slanted walls (see CORE), and
+  // under the open sky 'o' street, 's' sidewalk, 'g' grass, 'p' path, 'T' grass with a tree on it
   rows: string[]
   x0: number
   z0: number
@@ -56,8 +85,9 @@ export type Layout = {
   props: Prop[]
   rooms: { id: string; title: string; sign: Slot; slots: Slot[] }[]
   door?: { x: number; z: number; w: number } // the front door (ground floor), world units
-  // the entrance pavilion around the door: its front x, center z, width and depth, and its two columns; world units
-  entrance?: { x: number; z: number; w: number; d: number; columns: { x: number; z: number }[] }
+  // the entrance tower around the door: its front x, center z, width and the porch's depth, its two columns and the
+  // flagpoles out in the garden; world units
+  entrance?: { x: number; z: number; w: number; d: number; columns: { x: number; z: number }[]; flags: { x: number; z: number }[] }
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
   // the shrine's hall, the z of its torii and where its lanterns stand; world units
   shrine?: { x: number; z: number; w: number; d: number; gate: number; lanterns: { x: number; z: number }[] }
@@ -86,6 +116,9 @@ const wallSlot = (tx: number, tz: number, nx: number, nz: number): Slot => ({
   rot: Math.atan2(nx, nz),
 })
 const prop = (kind: Prop['kind'], tx: number, tz: number): Prop => ({ kind, x: (tx + 0.5) * TILE, z: (tz + 0.5) * TILE })
+// where the core's paintings hang: its '*' walls in reading order, and on each the sides facing north, west, east, south
+export const CORE_ART: Slot[] = CORE.flatMap((row, i) => [...row].flatMap((c, j) => (c !== '*' ? [] : [[0, -1], [-1, 0], [1, 0], [0, 1]]
+  .filter(([a, b]) => CORE[i + b]?.[j + a] === '.').map(([a, b]) => wallSlot(CORE_X0 + j + a, CORE_Z0 + i + b, a, b)))))
 // last column the rooms of a floor use; the courtyard is at least 10 tiles long
 const courtEnd = (rooms: number) => Math.max(COURT_X0 + 9, COURT_X0 + Math.ceil(rooms / 2) * (ROOM_W + 1) - 2)
 const roomDepth = (r: RoomIn) => Math.max(3, Math.ceil((r.count - ROOM_W) / 2))
@@ -104,10 +137,12 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   const depth = rooms.map(roomDepth)
   const end = courtX1 + 3 // last walkable column: the east corridor
   const box = { x0: 0, x1: end + 1, z0: -2 - north, z1: RING_END + 2 + south }
-  // the ground floor holds the block too, with the city around it and the forest, shrine and houses past that
+  // the ground floor holds the core in front of the building, and the block around both, with the city around it
+  // and the forest, shrine and houses past that
+  const site = ground ? { ...box, x0: CORE_X0 } : box
   const m = ground ? BLOCK.length + 1 : 0, wild = ground ? WILD : 0
-  const x0 = box.x0 - m - wild, z0 = box.z0 - m - wild, z1 = box.z1 + m
-  const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(box.x1 + m + 1 - x0).fill('#'))
+  const x0 = site.x0 - m - wild, z0 = site.z0 - m - wild, z1 = site.z1 + m
+  const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(site.x1 + m + 1 - x0).fill('#'))
   const set = (tx: number, tz: number, c: string) => { grid[tz - z0][tx - x0] = c }
   const posts = new Map<string, Post>()
   // a post goes on every tile it reaches into, so solidAt only ever has to look at the tile you're on
@@ -138,29 +173,41 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
       if (edge && !ground && grid[tz - z0][tx - x0] !== 'E') set(tx, tz, 'B')
     }
   }
-  // how far (tx, tz) is out from the building's outer walls along x and along z, in tiles; 0 or less is inside
-  const away = (tx: number, tz: number) => [Math.max(box.x0 - tx, tx - box.x1), Math.max(box.z0 - tz, tz - box.z1)]
+  // how far (tx, tz) is out from the outer walls of the building (and the core) along x and along z, in tiles; 0 or
+  // less is inside
+  const away = (tx: number, tz: number) => [Math.max(site.x0 - tx, tx - site.x1), Math.max(site.z0 - tz, tz - site.z1)]
   // is (tx, tz) out in front of the door, give or take `spare` rows?
   const byDoor = (tx: number, tz: number, spare = 0) => tx < 0 && tz >= 6 - spare && tz <= 7 + spare
   if (ground) {
     fill(2, 2, 2, 4, 'R') // reception desk, on your left as you come in
-    fill(0, 0, 6, 7, 'D') // double front door
-    for (let tx = x0 + 1; tx < box.x1 + m; tx++) {
+    fill(0, 0, 6, 7, 'D') // double door from the core
+    for (let tx = x0 + 1; tx < site.x1 + m; tx++) {
       for (let tz = z0 + 1; tz < z1; tz++) {
-        const d = Math.max(...away(tx, tz)), c = BLOCK[d - 1], w = box.x0 - tx, n = box.z0 - tz // how far west and north
+        const d = Math.max(...away(tx, tz)), c = BLOCK[d - 1], w = site.x0 - tx, n = site.z0 - tz // how far west and north
         if (w >= FAR && n >= NEAR && n <= FAR) set(tx, tz, BLOCK[n - 1]) // the street north of the block runs on west
-        else if (d > 0 && d <= FAR) set(tx, tz, c === 'g' && byDoor(tx, tz) ? 'p' : c) // a walk through the garden to the door
+        // a walk through the garden to the door, and a hedge around the garden, open at the gate
+        else if (d > 0 && d <= FAR) set(tx, tz, c !== 'g' ? c : byDoor(tx, tz) ? 'p' : d === HEDGE && !byDoor(tx, tz, 1) ? 'h' : c)
         // the forest, thick along the map's edge
         else if (w > FAR && n < NEAR) set(tx, tz, Math.min(tx - x0, z1 - tz) <= 2 || noise(tx, tz) < 0.4 ? 'T' : 'g')
         else if (n > FAR && w <= FAR) set(tx, tz, tx % 3 && tz % 3 ? '#' : 's') // houses two tiles square, alleys between
         // the shrine grounds are laid out below; past the east and south sidewalks, the city
       }
     }
-    // the entrance pavilion stands out from the facade around the door: a porch between two solid piers, its roof
-    // held up by two columns, one either side of the door
-    fill(-PORCH, -1, 4, 9, 'H')
-    fill(-PORCH, -1, 5, 8, 'p')
-    for (const tz of [6, 8]) post(-PORCH * TILE + PORTICO, tz * TILE, SHAFT)
+    // the core, in a garden where it leaves room; the entrance tower's roof is held up by two columns, one either
+    // side of the front door
+    fill(CORE_X0, -1, site.z0, site.z1, 'g')
+    CORE.forEach((row, i) => [...row].forEach((c, j) => set(CORE_X0 + j, CORE_Z0 + i, c === '*' ? '#' : c)))
+    for (const tz of [6, 8]) post(CORE_X0 * TILE + PORTICO, tz * TILE, SHAFT)
+  }
+  // real windows in the outer walls of the lobby and the east corridor, every other tile, wherever there's open air
+  // outside (downstairs the core stands against most of the lobby): a bay you step into to look out. Upstairs the
+  // glass is the edge of the map; downstairs a hedge outside it keeps you from walking through
+  for (const [tx, out] of [[box.x0, -1], [box.x1, 1]]) {
+    for (let tz = 0; tz <= RING_END; tz++) {
+      if (!((tx + tz) & 1) || (ground && !'gpT'.includes(grid[tz - z0][tx + out - x0]))) continue
+      set(tx, tz, 'W')
+      if (ground) set(tx + out, tz, 'h')
+    }
   }
 
   const out = rooms.map((r, i) => {
@@ -196,11 +243,12 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   fill(px - 1, px + 2, sz + 4, sz + 5, 'H')
 
   // lights at the garden gate; trees around the garden with a statue on each corner,
-  // lamps along the sidewalk, cherry trees along both long sides of the courtyard and beside the shrine, and two
-  // statues guarding its path
+  // lamps along the sidewalk, cherry trees along both long sides of the courtyard, beside the shrine and in the
+  // core's garden, two statues guarding the shrine's path and two more in the core's rooms
   const mid = (c: string) => (BLOCK.indexOf(c) + BLOCK.lastIndexOf(c)) / 2 + 1 // how far out a band's middle is
-  const garden = mid('g'), gate = BLOCK.lastIndexOf('g') + 1
-  const props = [prop('light', -gate, 5), prop('light', -gate, 8)]
+  const garden = mid('g')
+  const props = [prop('light', site.x0 - HEDGE, 5), prop('light', site.x0 - HEDGE, 8)]
+  props.push(prop('sakura', -2, 1), prop('statue', -9, 1), prop('statue', -4, 10))
   for (let tx = x0; tx <= box.x1 + m; tx++) {
     for (let tz = z0; tz <= z1; tz++) {
       const [dx, dz] = away(tx, tz), d = Math.max(dx, dz), n = (((tx + tz) % 12) + 12) % 12
@@ -226,13 +274,16 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     for (let j = WILD - 3.5; j > 7.5; j -= 3) lanterns.push({ x: cx + s * 2.6, z: (sz + j) * TILE })
   }
   for (const l of lanterns) post(l.x, l.z, LANTERN)
+  // a flagpole either side of the walk, halfway across the garden
+  const flags = [4, 9].map((tz) => ({ x: (site.x0 - garden + 0.5) * TILE, z: (tz + 0.5) * TILE }))
+  for (const f of flags) post(f.x, f.z, FLAGPOLE)
   return {
     rows: grid.map((r) => r.join('')), x0, z0, footprint: box, props, rooms: out, posts,
-    start: { x: (box.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
-    door: { x: 0.5 * TILE, z: 7 * TILE, w: 2 * TILE },
+    start: { x: (site.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
+    door: { x: (CORE_X0 + PORCH + 0.5) * TILE, z: 7 * TILE, w: 2 * TILE },
     entrance: {
-      x: -PORCH * TILE, z: 7 * TILE, w: 6 * TILE, d: PORCH * TILE,
-      columns: [6, 8].map((tz) => ({ x: -PORCH * TILE + PORTICO, z: tz * TILE })),
+      x: CORE_X0 * TILE, z: 7 * TILE, w: 6 * TILE, d: PORCH * TILE, flags,
+      columns: [6, 8].map((tz) => ({ x: CORE_X0 * TILE + PORTICO, z: tz * TILE })),
     },
     court: {
       x0: COURT_X0 * TILE, x1: (courtX1 + 1) * TILE, z0: COURT_Z0 * TILE, z1: (COURT_Z1 + 1) * TILE,
@@ -246,11 +297,15 @@ export const tileAt = (l: Layout | undefined, x: number, z: number) =>
   l?.rows[Math.floor(z / TILE) - l.z0]?.[Math.floor(x / TILE) - l.x0] ?? '#'
 
 // does something stop you at (x, z)? whole tiles for SOLID ones, only the post on a tile that has one (a column, a
-// trunk...) so you can walk right up to it; the elevator shaft is up to whoever drives the car
+// trunk...) so you can walk right up to it, the west half of a slanted wall's tile; the elevator shaft is up to
+// whoever drives the car
 export function solidAt(l: Layout | undefined, x: number, z: number) {
   const p = l?.posts.get(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`)
   if (p) return Math.abs(x - p.x) < p.r && Math.abs(z - p.z) < p.r
-  return SOLID.includes(tileAt(l, x, z))
+  const c = tileAt(l, x, z), u = x / TILE - Math.floor(x / TILE), v = z / TILE - Math.floor(z / TILE)
+  if (c === '\\') return u < v
+  if (c === '/') return u + v < 1
+  return SOLID.includes(c)
 }
 
 // is (x, z) in the lobby right in front of the elevator?
