@@ -36,6 +36,7 @@ MEDIA = {
     'audio/x-wav': ('audio', '.wav'), 'audio/mp4': ('audio', '.m4a'), 'audio/x-m4a': ('audio', '.m4a'),
 }
 TOKEN_AGE = 30 * 24 * 3600
+MAX_FLOORS = 99  # the client draws the whole building at once; keep it sane
 
 # in production the built client is served from here too
 app = Flask(__name__, static_folder=HERE.parent / 'client' / 'dist', static_url_path='/')
@@ -187,7 +188,10 @@ def museum():
 @need('curator')
 def add_floor():
     name = clean(request.get_json(silent=True) or {}, 'name', 60) or abort(400, 'Falta el nombre')
-    doc = {'name': name, 'order': db.floors.count_documents({}) + 1, 'created': now()}
+    count = db.floors.count_documents({})
+    if count >= MAX_FLOORS:
+        abort(400, f'El museo ya tiene el máximo de {MAX_FLOORS} pisos')
+    doc = {'name': name, 'order': count + 1, 'created': now()}
     db.floors.insert_one(doc)
     changed()
     return jsonify(out(doc)), 201
@@ -325,7 +329,7 @@ def is_num(v):
 
 @sock.route('/ws')
 def live(ws):
-    """First message {token} ('' for guests), then {f: floorId, x, z, y: yaw} ~10/s, or {chat: text}."""
+    """First message {token} ('' for guests), then {f: floorId, x, z, y: yaw, h: height} ~10/s, or {chat: text}."""
     pid = next(ids)
     try:
         first = json.loads(ws.receive(timeout=10) or '{}')
@@ -353,7 +357,8 @@ def live(ws):
                     last_chat = time.monotonic()
                     broadcast({'id': pid, 'n': name, 'chat': text})
             elif isinstance(p.get('f'), str) and len(p['f']) <= 32 and all(is_num(p.get(k)) for k in 'xzy'):
-                broadcast({'id': pid, 'n': name, 'f': p['f'], 'x': p['x'], 'z': p['z'], 'y': p['y']}, skip=ws)
+                h = p['h'] if is_num(p.get('h')) else 0
+                broadcast({'id': pid, 'n': name, 'f': p['f'], 'x': p['x'], 'z': p['z'], 'y': p['y'], 'h': h}, skip=ws)
     except ConnectionClosed:
         pass
     finally:

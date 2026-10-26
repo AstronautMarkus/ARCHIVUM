@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  buildFloor, tileAt, DOOR_H, SOLID, SPAWN, STREET_X, TILE, WALL_H, type Layout, type Prop, type Slot,
+  atLiftDoor, buildBuilding, solidAt, tileAt, DOOR_H, LIFT, SPAWN, STREET_X, TILE, WALL_H, type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, type Exhibit, type Floor, type Museum } from './api'
 
@@ -11,11 +11,11 @@ const EYE = 1.6
 const GOLD = '#ffcc33'
 const HAZE = '#9fd0f5' // sky at the horizon; outdoor fog fades into it
 const HAZE_COLOR = new THREE.Color(HAZE), DARK = new THREE.Color('#000')
-const STOREY = 3.5 // one floor seen from outside: 3 m of room plus the slab
+const STOREY = WALL_H // one floor seen from outside
 // storeys of the city buildings around the street, changing every three tiles
 const CITY = [3, 4, 2, 5, 3]
 const buildingHeight = (tx: number, tz: number) => CITY[((Math.floor((tx + tz) / 3) % 5) + 5) % 5] * STOREY + 0.5
-const odd = ([tx, tz]: [number, number]) => ((tx + tz) % 2 + 2) % 2 === 1 // which wall tiles get a window
+const odd = ([tx, tz]: readonly number[]) => ((tx + tz) % 2 + 2) % 2 === 1 // which wall tiles get a window
 const tmp = new THREE.Vector3()
 
 function retro(t: THREE.Texture, repeat = false) {
@@ -26,21 +26,19 @@ function retro(t: THREE.Texture, repeat = false) {
 }
 
 type Props = {
-  museum: Museum; floor: Floor; token: string; quiet: boolean
-  onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void; onLock: (locked: boolean) => void
-  onChanged: () => void; onChat: (m: Chat) => void; say: RefObject<(text: string) => void>
+  museum: Museum; floor: number; token: string; quiet: boolean
+  onFloor: (k: number) => void; onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
+  onLock: (locked: boolean) => void; onChanged: () => void; onChat: (m: Chat) => void; say: RefObject<(text: string) => void>
 }
 export type Chat = { id: number; n: string; chat: string }
 
-export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, onLock, onChanged, onChat, say }: Props) {
-  const rooms = museum.rooms.filter((r) => r.floor === floor.id)
+// the whole building in one scene; `floor` is where you stand, kept in sync both ways with stairs and elevator
+export function MuseumView({ museum, floor, token, quiet, onFloor, onElevator, onPick, onLock, onChanged, onChat, say }: Props) {
   const byRoom = Map.groupBy(museum.exhibits, (e) => e.room)
-  const ground = museum.floors[0]?.id === floor.id // only the ground floor opens onto the street
-  const key = floor.id + rooms.map((r) => `${r.id}:${r.title}:${byRoom.get(r.id)?.length ?? 0}`).join()
-  const layout = useMemo(
-    () => buildFloor(rooms.map((r) => ({ id: r.id, title: r.title, count: byRoom.get(r.id)?.length ?? 0 })), ground),
-    [key, ground],
-  )
+  const floors = museum.floors.map((f: Floor) => museum.rooms.filter((r) => r.floor === f.id)
+    .map((r) => ({ id: r.id, title: r.title, count: byRoom.get(r.id)?.length ?? 0 })))
+  const key = JSON.stringify(floors)
+  const layouts = useMemo(() => buildBuilding(floors), [key])
   const sky = useMemo(makeSky, [])
   return (
     // render at ~240 lines and let CSS scale it up with hard pixels
@@ -48,10 +46,10 @@ export function MuseumView({ museum, floor, token, quiet, onElevator, onPick, on
       <primitive attach="background" object={sky} />
       <fog attach="fog" args={['#000', 3, 24]} />
       <Suspense fallback={null}>
-        <World layout={layout} byRoom={byRoom} quiet={quiet} storeys={museum.floors.length} />
-        <Avatars floorId={floor.id} token={token} onChanged={onChanged} onChat={onChat} say={say} />
+        <World layouts={layouts} byRoom={byRoom} quiet={quiet} current={floor} />
+        <Avatars floorId={museum.floors[floor]?.id ?? ''} token={token} onChanged={onChanged} onChat={onChat} say={say} />
       </Suspense>
-      <Player layout={layout} floorId={floor.id} onElevator={onElevator} onPick={onPick} />
+      <Player layouts={layouts} floor={floor} onFloor={onFloor} onElevator={onElevator} onPick={onPick} />
       <PointerLockControls selector="#lock" onLock={() => onLock(true)} onUnlock={() => onLock(false)} />
     </Canvas>
   )
@@ -129,64 +127,85 @@ function withWindow(tex: THREE.Texture) {
   return new THREE.CanvasTexture(c)
 }
 
-type Cell = [number, number]
+type Cell = [number, number, number] // tile x, tile z, height of the floor it belongs to
+type Box = [number, number, number, number, number, number] // center x, y, z and size x, y, z
 const OUTDOOR = 'ogp' // tiles under the open sky
 
-function World({ layout, byRoom, quiet, storeys }: {
-  layout: Layout; byRoom: Map<string, Exhibit[]>; quiet: boolean; storeys: number
+// The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
+// same draw calls. Exhibits, signs and media, the heavy part, exist only for your floor and the ones next to it.
+function World({ layouts, byRoom, quiet, current }: {
+  layouts: Layout[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number
 }) {
-  const [wall, parquet, ceil, lite, facade, house, street, sidewalk, door, lobby, grass, wood, ...water] = useTexture([
+  const [wall, parquet, ceil, lite, facade, house, street, sidewalk, door, lobby, grass, wood, metal, ...water] = useTexture([
     '/doom/bigwall.png', '/doom/floor0_1.png', '/doom/ceil3_5.png', '/doom/tlite6_1.png',
     '/doom/stonew5.png', '/doom/pbrick8.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
-    '/doom/flat18.png', '/doom/grass1.png', '/doom/wood.png',
+    '/doom/flat18.png', '/doom/grass1.png', '/doom/wood.png', '/doom/door2_5.png',
     '/doom/fwater1.png', '/doom/fwater2.png', '/doom/fwater3.png', '/doom/fwater4.png',
   ])
-  useMemo(() => [lite, ...water].forEach((t) => retro(t)), [lite, water])
+  useMemo(() => water.forEach((t) => retro(t)), [water])
   const [facadeWin, brickWin] = useMemo(() => [withWindow(facade), withWindow(house)], [facade, house])
-  const top = storeys * STOREY + 0.9 // the museum is as tall as its floors, plus a parapet
+  const ground = layouts[0]
+  const top = layouts.length * STOREY + 0.9 // the museum is as tall as its floors, plus a parapet
+  const near = (k: number) => Math.abs(k - current) <= 1
 
-  // sort every tile into what gets drawn there
+  // sort every tile of every floor into what gets drawn there
   const t = useMemo(() => {
     const t = {
       inner: [] as Cell[], front: [] as Cell[], houses: [] as Cell[], doors: [] as Cell[], columns: [] as Cell[],
-      desk: [] as Cell[], parquet: [] as Cell[], lobby: [] as Cell[], grass: [] as Cell[], path: [] as Cell[],
-      street: [] as Cell[], sidewalk: [] as Cell[], ceiling: [] as Cell[],
+      rails: [] as Box[], desk: [] as Cell[], parquet: [] as Cell[],
+      lobby: [] as Cell[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[], sidewalk: [] as Cell[],
+      ceiling: [] as Cell[],
     }
-    const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
-    layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
-      const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz]
-      if (c === '#') {
-        // walls touching the street are city buildings, or the museum facade on the building's west face (x = 0)
-        const near = [at(tx + 1, tz), at(tx - 1, tz), at(tx, tz + 1), at(tx, tz - 1)]
-        if (near.includes('o')) (tx === 0 ? t.front : t.houses).push(cell)
-        else if (near.some((n) => n !== '#')) t.inner.push(cell)
-      } else if (c === 'o') (STREET_X > (tx + 0.5) * TILE ? t.street : t.sidewalk).push(cell)
-      else if (c === 'g' || c === 'F') t.grass.push(cell)
-      else if (c === 'p') t.path.push(cell)
-      else {
-        t.ceiling.push(cell)
-        ;(c === 'L' ? t.lobby : t.parquet).push(cell)
-        if (c === 'D') t.doors.push(cell)
-        if (c === 'C') t.columns.push(cell)
-        if (c === 'R') t.desk.push(cell)
-      }
-    }))
-    // upper floors run over the front door too; only every other tile gets a window
-    const above = [...t.front, ...t.doors.filter(([tx]) => tx === 0)]
-    const upper = { win: above.filter(odd), plain: above.filter((c) => !odd(c)) }
+    layouts.forEach((layout, k) => {
+      const y = k * STOREY
+      const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
+      layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
+        const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz, y]
+        if (c === '#') {
+          // walls touching the street are city buildings, or the museum facade on its west face (x = 0)
+          const nb = [at(tx + 1, tz), at(tx - 1, tz), at(tx, tz + 1), at(tx, tz - 1)]
+          if (nb.includes('o')) (tx === 0 ? t.front : t.houses).push(cell)
+          else if (nb.some((n) => n !== '#')) t.inner.push(cell)
+        } else if (c === 'o') (STREET_X > (tx + 0.5) * TILE ? t.street : t.sidewalk).push(cell)
+        else if (c === 'g' || c === 'F') t.grass.push(cell)
+        else if (c === 'p') t.path.push(cell)
+        else if (c !== 'v' && c !== 'E') { // the courtyard and the elevator shaft stay open all the way up
+          t.ceiling.push(cell)
+          ;(c === 'L' ? t.lobby : t.parquet).push(cell)
+          if (c === 'D') t.doors.push(cell)
+          if (c === 'C') t.columns.push(cell)
+          // a thin railing along the courtyard edge, running past the columns and a bit beyond each tile so the
+          // pieces meet without gaps
+          if (c === 'B' || c === 'C') {
+            for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+              if (at(tx + a, tz + b) !== 'v') continue
+              t.rails.push([(tx + 0.5 + a * 0.47) * TILE, y + 0.5, (tz + 0.5 + b * 0.47) * TILE,
+                a ? 0.12 : TILE + 0.2, 1, b ? 0.12 : TILE + 0.2])
+            }
+          }
+          if (c === 'R') t.desk.push(cell)
+        }
+      }))
+    })
+    // above the ground floor the facade is a thin skin outside the upper floors' own walls, so inside you see
+    // your floor's wall and outside the windows; only every other tile gets one
+    const h = top - STOREY
+    const skin = (cells: Cell[]): Box[] => cells.map(([tx, tz]) => [-0.1, STOREY + h / 2, (tz + 0.5) * TILE, 0.2, h, TILE])
+    const above = [...t.front, ...t.doors.filter(([tx, , y]) => tx === 0 && y === 0)]
+    const upper = { win: skin(above.filter(odd)), plain: skin(above.filter((c) => !odd(c))), h }
     const city = [...Map.groupBy(t.houses, ([tx, tz]) => buildingHeight(tx, tz))]
       .map(([h, cells]) => ({ h, win: cells.filter(odd), plain: cells.filter((c) => !odd(c)) }))
     const deskZ = t.desk.reduce((s, [, tz]) => s + (tz + 0.5) * TILE, 0) / (t.desk.length || 1)
     return { ...t, upper, city, deskZ }
-  }, [layout])
+  }, [layouts, top])
 
   return (
     <>
       <group name="walls">
         <WallSet cells={t.inner} tex={wall} height={WALL_H} />
         <WallSet cells={t.front} tex={facade} height={STOREY} every={STOREY} />
-        <WallSet cells={t.upper.win} tex={facadeWin} base={STOREY} height={top - STOREY} every={STOREY} />
-        <WallSet cells={t.upper.plain} tex={facade} base={STOREY} height={top - STOREY} every={STOREY} />
+        <Boxes boxes={t.upper.win} tex={facadeWin} repeat={[1, t.upper.h / STOREY]} />
+        <Boxes boxes={t.upper.plain} tex={facade} repeat={[1, t.upper.h / STOREY]} />
         {t.city.map(({ h, win, plain }) => (
           <Fragment key={h}>
             <WallSet cells={win} tex={brickWin} height={h} every={STOREY} />
@@ -194,6 +213,7 @@ function World({ layout, byRoom, quiet, storeys }: {
           </Fragment>
         ))}
         <WallSet cells={t.columns} tex={facade} height={WALL_H} size={0.7} />
+        <Boxes boxes={t.rails} tex={facade} />
         <WallSet cells={t.desk} tex={wood} height={1.1} every={1.1} />
       </group>
       <TileSet cells={t.parquet} tex={parquet} />
@@ -202,51 +222,56 @@ function World({ layout, byRoom, quiet, storeys }: {
       <TileSet cells={t.path} tex={sidewalk} />
       <TileSet cells={t.street} tex={street} />
       <TileSet cells={t.sidewalk} tex={sidewalk} />
-      <TileSet cells={t.ceiling} tex={ceil} y={WALL_H} />
-      {layout.door && (
+      <TileSet cells={t.ceiling} tex={ceil} y={WALL_H - 0.005} />
+      {t.doors.map(([tx, tz, y]) => tx === 0 && y === 0
+        ? <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={facade} top={STOREY} />
+        : <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} top={WALL_H} />)}
+      {ground.door && (
         <>
-          <Text position={[-0.05, (DOOR_H + STOREY) / 2, layout.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} color={GOLD}
+          <Text position={[-0.05, (DOOR_H + STOREY) / 2, ground.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} color={GOLD}
             outlineWidth={0.04} outlineColor="#3a2a14">ARCHIVUM</Text>
-          <FrontDoor at={layout.door} tex={door} />
+          <FrontDoor at={ground.door} tex={door} />
         </>
       )}
       {t.desk.length > 0 && (
         <Text position={[TILE + 0.03, 2.2, t.deskZ]} rotation-y={Math.PI / 2} fontSize={0.6} color={GOLD}
           outlineWidth={0.03} outlineColor="#3a2a14">RECEPCIÓN</Text>
       )}
-      {layout.court && (
+      {ground.court && (
         <>
-          <Fountain at={layout.court.fountain} stone={facade} water={water} />
-          <Petals court={layout.court} />
+          <Fountain at={ground.court.fountain} stone={facade} water={water} />
+          <Petals court={ground.court} />
         </>
       )}
-      <Props props={layout.props} />
-      {t.doors.map(([tx, tz]) => tx === 0
-        ? <Lintel key={`${tx},${tz}`} tx={tx} tz={tz} tex={facade} top={STOREY} />
-        : <Lintel key={`${tx},${tz}`} tx={tx} tz={tz} tex={wall} top={WALL_H} />)}
-      <mesh rotation-x={-Math.PI / 2} position={[1.5 * TILE, 0.01, 0.5 * TILE]}>
-        <planeGeometry args={[TILE, TILE]} />
-        <meshBasicMaterial map={lite} />
-      </mesh>
-      <Text position={[TILE + 0.03, 2, 0.5 * TILE]} rotation-y={Math.PI / 2} fontSize={0.3} color={GOLD}>ASCENSOR</Text>
-      {layout.rooms.map((r) => (
-        <Text key={r.id} position={[r.sign.x, (DOOR_H + WALL_H) / 2, r.sign.z]} rotation-y={r.sign.rot}
-          fontSize={0.22} maxWidth={TILE * 1.8} textAlign="center" color={GOLD}>
-          {r.title.toUpperCase()}
-        </Text>
+      <Props props={ground.props} />
+      <Elevator floors={layouts.length} near={near} stone={facade} metal={metal} lamp={lite} />
+      {layouts.map((layout, k) => near(k) && (
+        <group key={k} position-y={k * STOREY}>
+          {layout.rooms.map((r) => (
+            <Text key={r.id} position={[r.sign.x, (DOOR_H + WALL_H) / 2, r.sign.z]} rotation-y={r.sign.rot}
+              fontSize={0.22} maxWidth={TILE * 1.8} textAlign="center" color={GOLD}>
+              {r.title.toUpperCase()}
+            </Text>
+          ))}
+        </group>
       ))}
       <group name="exhibits">
-        {layout.rooms.flatMap((r) => (byRoom.get(r.id) ?? []).map((ex, i) => (
-          <Suspense key={ex.id} fallback={null}>
-            <ExhibitView ex={ex} slot={r.slots[i]} quiet={quiet} />
-          </Suspense>
-        )))}
+        {layouts.map((layout, k) => near(k) && (
+          <group key={k} position-y={k * STOREY}>
+            {layout.rooms.flatMap((r) => (byRoom.get(r.id) ?? []).map((ex, i) => (
+              <Suspense key={ex.id} fallback={null}>
+                <ExhibitView ex={ex} slot={r.slots[i]} quiet={quiet} />
+              </Suspense>
+            )))}
+          </group>
+        ))}
       </group>
     </>
   )
 }
 
-// one instanced box per tile, from y = base up, `size` wide; the texture repeats once across and every `every` meters up
+// one instanced box per tile, from its floor + base up, `size` wide; the texture repeats once across and every
+// `every` meters up
 function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
   cells: Cell[]; tex: THREE.Texture; height: number; base?: number; every?: number; size?: number
 }) {
@@ -259,7 +284,7 @@ function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
   }, [tex, height, every])
   useLayoutEffect(() => {
     const m = new THREE.Matrix4()
-    cells.forEach(([tx, tz], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, base + height / 2, (tz + 0.5) * TILE)))
+    cells.forEach(([tx, tz, y], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, y + base + height / 2, (tz + 0.5) * TILE)))
     ref.current.instanceMatrix.needsUpdate = true
     ref.current.computeBoundingSphere()
   }, [cells, height, base])
@@ -271,10 +296,10 @@ function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
   )
 }
 
-// one textured square per tile: a floor, or a ceiling facing down when y > 0
+// one textured square per tile, y above its floor: a floor, or a ceiling facing down when y is high up
 function TileSet({ cells, tex, y = 0 }: { cells: Cell[]; tex: THREE.Texture; y?: number }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
-  const geometry = useMemo(() => new THREE.PlaneGeometry(TILE, TILE).rotateX(y > 0 ? Math.PI / 2 : -Math.PI / 2), [y])
+  const geometry = useMemo(() => new THREE.PlaneGeometry(TILE, TILE).rotateX(y > 1 ? Math.PI / 2 : -Math.PI / 2), [y])
   const map = useMemo(() => {
     const t = tex.clone()
     retro(t, true)
@@ -282,7 +307,7 @@ function TileSet({ cells, tex, y = 0 }: { cells: Cell[]; tex: THREE.Texture; y?:
   }, [tex])
   useLayoutEffect(() => {
     const m = new THREE.Matrix4()
-    cells.forEach(([tx, tz], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, y, (tz + 0.5) * TILE)))
+    cells.forEach(([tx, tz, fy], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, fy + y, (tz + 0.5) * TILE)))
     ref.current.instanceMatrix.needsUpdate = true
   }, [cells, y])
   return (
@@ -292,7 +317,118 @@ function TileSet({ cells, tex, y = 0 }: { cells: Cell[]; tex: THREE.Texture; y?:
   )
 }
 
-function Lintel({ tx, tz, tex, top }: { tx: number; tz: number; tex: THREE.Texture; top: number }) {
+// The elevator: a glass shaft on the courtyard's west edge, with a car that really travels it. Player drives the
+// car (you call it from its door, ride it, pick a floor); this only draws it.
+// shortcut: each visitor has their own car, so a friend riding theirs seems to float up the shaft on your screen
+// at: floor it's at (fractional while moving); target: floor it's going to; doors: 0 shut .. 1 open;
+// v: speed in floors per second; still: seconds since it shut its doors or arrived, for the pauses in between
+const car = { at: 0, target: 0, doors: 0, v: 0, still: 1 }
+const GLASS = { color: HAZE, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }
+
+function Elevator({ floors, near, stone, metal, lamp }: {
+  floors: number; near: (k: number) => boolean; stone: THREE.Texture; metal: THREE.Texture; lamp: THREE.Texture
+}) {
+  const { x0, z, door } = LIFT, cx = x0 + TILE / 2, H = floors * STOREY
+  const leafW = door / 2, panelW = (TILE - door) / 2 // two leaves fill the opening; fixed panels flank it
+  const cab = useRef<THREE.Group>(null!), left = useRef<THREE.Mesh>(null!), right = useRef<THREE.Mesh>(null!)
+  const [docked, setDocked] = useState(0) // where the car stands still; its own doors replace that landing's
+  useFrame(() => {
+    cab.current.position.y = car.at * STOREY
+    left.current.position.z = z - leafW / 2 - car.doors * leafW * 0.95 // the leaves slide behind the panels
+    right.current.position.z = z + leafW / 2 + car.doors * leafW * 0.95
+    const d = car.at === car.target ? car.at : -1
+    if (d !== docked) setDocked(d)
+  })
+  // corner posts up the whole shaft; on every floor a lintel and two panels around the doors, and closed landing
+  // doors wherever the car isn't
+  const frame = useMemo(() => [
+    ...[[x0, z - 1], [x0, z + 1], [x0 + TILE, z - 1], [x0 + TILE, z + 1]].map(([x, zz]): Box => [x, H / 2, zz, 0.15, H, 0.15]),
+    [cx, H + 0.6, z, TILE + 0.3, 1.2, TILE + 0.3] as Box, // the machine room capping the shaft
+    ...Array.from({ length: floors }, (_, k): Box[] => [
+      [x0, k * STOREY + (DOOR_H + STOREY) / 2, z, 0.2, STOREY - DOOR_H, TILE],
+      ...[-1, 1].map((s): Box => [x0, k * STOREY + DOOR_H / 2, z + s * (door + panelW) / 2, 0.2, DOOR_H, panelW]),
+    ]).flat(),
+  ], [floors, H, x0, cx, z, door, panelW])
+  const landings = useMemo(() => {
+    const leaf = (k: number, s: number): Box => [x0 - 0.13, k * STOREY + DOOR_H / 2, z + (s * leafW) / 2, 0.06, DOOR_H, leafW]
+    const shut = Array.from({ length: floors }, (_, k) => k).filter((k) => k !== docked)
+    return { left: shut.map((k) => leaf(k, -1)), right: shut.map((k) => leaf(k, 1)) }
+  }, [floors, docked, x0, z, leafW])
+  // the right leaf shows the door picture flipped, so the pair meets in the middle like real elevator doors
+  const [leaf, flipped] = useMemo(() => [1, -1].map((dir) => {
+    const t = metal.clone()
+    retro(t, true)
+    t.repeat.x = dir
+    return t
+  }), [metal])
+  return (
+    <>
+      <Boxes boxes={frame} tex={stone} />
+      <Boxes boxes={landings.left} tex={metal} />
+      <Boxes boxes={landings.right} tex={metal} repeat={[-1, 1]} />
+      {[[cx, z - TILE / 2, 0], [cx, z + TILE / 2, 0], [x0 + TILE, z, Math.PI / 2]].map(([x, zz, r], i) => (
+        <mesh key={i} position={[x, H / 2, zz]} rotation-y={r}>
+          <planeGeometry args={[TILE, H]} />
+          <meshBasicMaterial {...GLASS} />
+        </mesh>
+      ))}
+      {/* the car: closed all round but for its doors and the glass back that looks onto the courtyard */}
+      <group ref={cab}>
+        <mesh position={[cx, 0.05, z]}><boxGeometry args={[TILE - 0.1, 0.1, TILE - 0.1]} /><meshBasicMaterial color="#4a4f57" /></mesh>
+        <mesh position={[cx, 3.05, z]}><boxGeometry args={[TILE - 0.1, 0.1, TILE - 0.1]} /><meshBasicMaterial map={lamp} /></mesh>
+        {[-1, 1].map((s) => (
+          <mesh key={s} position={[cx, 1.55, z + s * (TILE / 2 - 0.08)]}>
+            <boxGeometry args={[TILE - 0.1, 3, 0.06]} />
+            <meshBasicMaterial color="#6f7782" />
+          </mesh>
+        ))}
+        <mesh position={[x0 + 0.18, (DOOR_H + 3.05) / 2, z]}>
+          <boxGeometry args={[0.04, 3.05 - DOOR_H, TILE - 0.1]} />
+          <meshBasicMaterial color="#6f7782" />
+        </mesh>
+        {[-1, 1].map((s) => (
+          <mesh key={s} position={[x0 + 0.18, DOOR_H / 2, z + s * (door + panelW) / 2]}>
+            <boxGeometry args={[0.04, DOOR_H, panelW]} />
+            <meshBasicMaterial color="#6f7782" />
+          </mesh>
+        ))}
+        <mesh position={[x0 + TILE - 0.08, 1.55, z]}><boxGeometry args={[0.04, 3, TILE - 0.1]} /><meshBasicMaterial {...GLASS} /></mesh>
+        <mesh ref={left} position={[x0 + 0.13, DOOR_H / 2, z - leafW / 2]}><boxGeometry args={[0.06, DOOR_H, leafW]} /><meshBasicMaterial map={leaf} /></mesh>
+        <mesh ref={right} position={[x0 + 0.13, DOOR_H / 2, z + leafW / 2]}><boxGeometry args={[0.06, DOOR_H, leafW]} /><meshBasicMaterial map={flipped} /></mesh>
+      </group>
+      {Array.from({ length: floors }, (_, k) => near(k) && (
+        <Text key={k} position={[x0 - 0.12, k * STOREY + 2.85, z]} rotation-y={-Math.PI / 2} fontSize={0.3} color={GOLD}>
+          ASCENSOR
+        </Text>
+      ))}
+    </>
+  )
+}
+
+// instanced boxes placed and sized one by one: railings, stairs, the facade skin
+function Boxes({ boxes, tex, repeat = [1, 1] }: { boxes: Box[]; tex: THREE.Texture; repeat?: [number, number] }) {
+  const ref = useRef<THREE.InstancedMesh>(null!)
+  const map = useMemo(() => {
+    const t = tex.clone()
+    retro(t, true)
+    t.repeat.set(repeat[0], repeat[1])
+    return t
+  }, [tex, repeat[0], repeat[1]])
+  useLayoutEffect(() => {
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), at = new THREE.Vector3(), size = new THREE.Vector3()
+    boxes.forEach(([x, y, z, sx, sy, sz], i) => ref.current.setMatrixAt(i, m.compose(at.set(x, y, z), q, size.set(sx, sy, sz))))
+    ref.current.instanceMatrix.needsUpdate = true
+    ref.current.computeBoundingSphere()
+  }, [boxes])
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, boxes.length]}>
+      <boxGeometry />
+      <meshBasicMaterial map={map} />
+    </instancedMesh>
+  )
+}
+
+function Lintel({ tx, tz, y, tex, top }: { tx: number; tz: number; y: number; tex: THREE.Texture; top: number }) {
   const map = useMemo(() => {
     const t = tex.clone()
     retro(t, true)
@@ -300,7 +436,7 @@ function Lintel({ tx, tz, tex, top }: { tx: number; tz: number; tex: THREE.Textu
     return t
   }, [tex, top])
   return (
-    <mesh position={[(tx + 0.5) * TILE, (DOOR_H + top) / 2, (tz + 0.5) * TILE]}>
+    <mesh position={[(tx + 0.5) * TILE, y + (DOOR_H + top) / 2, (tz + 0.5) * TILE]}>
       <boxGeometry args={[TILE, top - DOOR_H, TILE]} />
       <meshBasicMaterial map={map} />
     </mesh>
@@ -523,10 +659,11 @@ function Media({ ex, quiet }: { ex: Exhibit; quiet: boolean }) {
 
 const UP = new THREE.Vector3(0, 1, 0)
 const CENTER = new THREE.Vector2(0, 0)
-const R = 0.3 // body radius
+const R = 0.2 // body radius: small, so you can walk right up to walls and what hangs on them
 
-function Player({ layout, floorId, onElevator, onPick }: {
-  layout: Layout; floorId: string; onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
+function Player({ layouts, floor, onFloor, onElevator, onPick }: {
+  layouts: Layout[]; floor: number; onFloor: (k: number) => void
+  onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
 }) {
   const { camera, scene } = useThree()
   const keys = useRef<Record<string, boolean>>({})
@@ -534,15 +671,39 @@ function Player({ layout, floorId, onElevator, onPick }: {
   const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, 4), [])
   const dir = useMemo(() => new THREE.Vector3(), [])
 
-  // arriving at the museum puts you at layout.start (the street); the elevator drops you next to itself
+  // The floor you're on. Riding the elevator changes it here and reports it up; when `floor` changes from outside
+  // (the elevator buttons) while you're in the car, the car goes there. Arriving at the museum puts you in the
+  // street; anything else that moves you between floors drops you in that floor's lobby.
+  const fl = useRef(floor)
   const arrived = useRef(false)
-  const spawn = () => {
-    const s = arrived.current ? SPAWN : layout.start
+  const inCar = () => tileAt(layouts[0], camera.position.x, camera.position.z) === 'E' // same shaft on every floor
+  // elevator sounds from Freedoom, louder the closer you are to the car
+  const sound = useMemo(() => Object.fromEntries(['dsbdopn', 'dsbdcls', 'dspstart', 'dspstop', 'dsswtchn']
+    .map((name) => [name, new Audio(`/doom/${name}.wav`)])), [])
+  const play = (name: string) => {
+    const p = camera.position, d = Math.hypot(p.x - LIFT.x0 - TILE / 2, p.y - car.at * WALL_H - EYE, p.z - LIFT.z)
+    const a = sound[name], volume = Math.min(1, Math.max(0, 1 - d / 20)) * 0.7
+    if (volume === 0) return
+    a.currentTime = 0
+    a.volume = volume
+    a.play().catch(() => {}) // blocked until the first click
+  }
+  const was = useRef({ doors: 0, moving: false }) // which way the doors went and whether the car moved, last frame
+  const spawn = (k: number) => {
+    const s = arrived.current ? SPAWN : layouts[0].start
     arrived.current = true
-    camera.position.set(s.x, EYE, s.z)
+    fl.current = k
+    camera.position.set(s.x, k * WALL_H + EYE, s.z)
     camera.rotation.set(0, -Math.PI / 2, 0)
   }
-  useEffect(spawn, [floorId])
+  useEffect(() => {
+    if (!arrived.current) spawn(floor)
+    else if (floor !== fl.current) {
+      // a button in the car: it goes there, and the HUD keeps showing the floor you're actually on
+      if (inCar()) { car.target = floor; play('dsswtchn'); onFloor(fl.current) }
+      else spawn(floor)
+    }
+  }, [floor])
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -557,6 +718,7 @@ function Player({ layout, floorId, onElevator, onPick }: {
   useFrame((_, dt) => {
     const k = keys.current, p = camera.position
     dt = Math.min(dt, 0.1)
+    if (fl.current >= layouts.length) return spawn(layouts.length - 1) // floors were deleted under us
     const turn = (k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0)
     if (turn) camera.rotateOnWorldAxis(UP, turn * 2.5 * dt)
 
@@ -566,28 +728,72 @@ function Player({ layout, floorId, onElevator, onPick }: {
     const fwd = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0)
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0)
     const step = (k.ShiftLeft || k.ShiftRight ? 8 : 4) * dt
-    // walls, columns, the fountain, the desk, and the front door (the only doorway at x < TILE) until it's mostly up
-    const solid = (x: number, z: number) => {
-      const t = tileAt(layout, x, z)
-      return SOLID.includes(t) || (t === 'D' && x < TILE && frontDoor.open < 0.8)
+    const here = fl.current, l = layouts[here], riding = inCar()
+    car.target = Math.min(car.target, layouts.length - 1)
+    // the car, like a real one: standing at its door calls it to your floor. To go anywhere it shuts its doors,
+    // waits a beat, speeds up gently, slows down as it gets close, stops, waits a beat, and only then opens its
+    // doors (while you're at them or inside)
+    if (!riding && atLiftDoor(p.x, p.z)) car.target = here
+    const before = { doors: car.doors, at: car.at }
+    car.still += dt
+    if (car.at !== car.target) {
+      if (car.doors > 0) {
+        car.doors = Math.max(0, car.doors - dt * 1.5)
+        car.still = 0
+      } else if (car.still > 0.5) {
+        const d = car.target - car.at, cruise = Math.min(2.5, Math.max(0.35, Math.abs(d) * 0.6))
+        car.v = Math.min(cruise, car.v + dt * 1.2)
+        if (Math.abs(d) <= car.v * dt) Object.assign(car, { at: car.target, v: 0, still: 0 })
+        else car.at += Math.sign(d) * car.v * dt
+      }
+    } else if (car.still > 0.5) {
+      const wanted = riding || (car.at === here && Math.hypot(p.x - LIFT.x0, p.z - LIFT.z) < 3)
+      car.doors = THREE.MathUtils.clamp(car.doors + (wanted ? 1.5 : -1.5) * dt, 0, 1)
     }
-    const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => !solid(x + a, z + b))
+    const doors = Math.sign(car.doors - before.doors), moving = car.at !== before.at
+    if (doors && doors !== was.current.doors) play(doors > 0 ? 'dsbdopn' : 'dsbdcls')
+    if (moving !== was.current.moving) play(moving ? 'dspstart' : 'dspstop')
+    was.current = { doors, moving }
+
+    // what stops you: walls, desk, fountain, the shafts of columns; the front door until it's mostly up; and the
+    // car, which you only get in or out of through its doorway once the doors are open, from the tile in front
+    const open = (x: number, z: number) => {
+      const inside = tileAt(l, x, z) === 'E'
+      if (inside !== riding) {
+        const [ox, oz] = inside ? [p.x, p.z] : [x, z]
+        return car.at === here && car.doors >= 0.9 && atLiftDoor(ox, oz) && Math.abs(z - LIFT.z) < LIFT.door / 2
+      }
+      if (inside) return true
+      if (here === 0 && x < TILE && tileAt(l, x, z) === 'D' && frontDoor.open < 0.8) return false
+      return !solidAt(l, x, z)
+    }
+    const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => open(x + a, z + b))
     const nx = p.x + (dir.x * fwd - dir.z * side) * step
     const nz = p.z + (dir.z * fwd + dir.x * side) * step
     if (free(nx, p.z)) p.x = nx
     if (free(p.x, nz)) p.z = nz
-    if (SOLID.includes(tileAt(layout, p.x, p.z))) spawn() // the map changed under us
 
-    const elevator = tileAt(layout, p.x, p.z) === 'E'
+    // riding, you go wherever the car goes and the floor counts up as you pass them
+    if (riding) {
+      const passing = Math.round(car.at)
+      if (passing !== here) onFloor((fl.current = passing))
+      p.y = car.at * WALL_H + EYE
+    } else {
+      if (solidAt(l, p.x, p.z)) return spawn(here) // the map changed under us
+      p.y += (here * WALL_H + EYE - p.y) * Math.min(1, dt * 12)
+    }
+    const f = fl.current
+    const at = (x: number, z: number) => tileAt(layouts[f], x, z)
+    const elevator = inCar()
     if (elevator !== last.current.elevator) onElevator((last.current.elevator = elevator))
 
-    // outside the fog turns into a light haze; inside it's Doom darkness, kept far on the ground floor so the
-    // sunny courtyard doesn't look like night from the lobby
-    const out = OUTDOOR.includes(tileAt(layout, p.x, p.z)), fog = scene.fog as THREE.Fog, f = Math.min(1, dt * 3)
-    const [near, far] = out ? [25, 70] : layout.court ? [14, 60] : [3, 24]
-    fog.color.lerp(out ? HAZE_COLOR : DARK, f)
-    fog.near += (near - fog.near) * f
-    fog.far += (far - fog.far) * f
+    // outside the fog turns into a light haze; inside it's Doom darkness, kept far enough that the sunny
+    // courtyard doesn't look like night from the corridors around it
+    const out = OUTDOOR.includes(at(p.x, p.z)), fog = scene.fog as THREE.Fog, lerp = Math.min(1, dt * 3)
+    const [near, far] = out ? [25, 70] : [12, 55]
+    fog.color.lerp(out ? HAZE_COLOR : DARK, lerp)
+    fog.near += (near - fog.near) * lerp
+    fog.far += (far - fog.far) * lerp
 
     // what the crosshair points at; walls block it
     ray.setFromCamera(CENTER, camera)
@@ -603,7 +809,7 @@ function Player({ layout, floorId, onElevator, onPick }: {
 
 // ---- other visitors ----
 
-type Peer = { n: string; f: string; x: number; z: number; y: number; t: number }
+type Peer = { n: string; f: string; x: number; z: number; y: number; h: number; t: number }
 const LIVE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 // Freedoom marine: frames a-d (walk cycle) x rotations 1-5; 6-8 are 4-2 mirrored
 const SPRITES = [...'abcd'].flatMap((f) => [`${f}1`, `${f}2${f}8`, `${f}3${f}7`, `${f}4${f}6`, `${f}5`].map((r) => `/doom/play${r}.png`))
@@ -654,23 +860,26 @@ function Avatars({ floorId, token, onChanged, onChat, say }: Pick<Props, 'token'
     if ((since.current += dt) < 0.1 || ws.current?.readyState !== WebSocket.OPEN) return
     since.current = 0
     camera.getWorldDirection(tmp)
-    ws.current.send(JSON.stringify({ f: floorId, x: camera.position.x, z: camera.position.z, y: Math.atan2(-tmp.x, -tmp.z) }))
+    const { x, y, z } = camera.position
+    ws.current.send(JSON.stringify({ f: floorId, x, z, y: Math.atan2(-tmp.x, -tmp.z), h: y - EYE }))
   })
 
-  return <>{ids.map((id) => <Avatar key={id} peer={() => peers.current.get(id)} floorId={floorId} tex={tex} />)}</>
+  return <>{ids.map((id) => <Avatar key={id} peer={() => peers.current.get(id)} tex={tex} />)}</>
 }
 
-function Avatar({ peer, floorId, tex }: { peer: () => Peer | undefined; floorId: string; tex: THREE.Texture[] }) {
+// everyone is drawn at their own height, so you can wave at a friend on a balcony across the courtyard
+function Avatar({ peer, tex }: { peer: () => Peer | undefined; tex: THREE.Texture[] }) {
   const g = useRef<THREE.Group>(null!)
   const sprite = useRef<THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>>(null!)
   useFrame(({ camera, clock }) => {
     const p = peer()
-    g.current.visible = !!p && p.f === floorId && performance.now() - p.t < 5000
+    g.current.visible = !!p && performance.now() - p.t < 5000
     if (!p || !g.current.visible) return
-    const pos = g.current.position
-    if (!g.current.userData.seen) { pos.set(p.x, 0, p.z); g.current.userData.seen = true }
+    const pos = g.current.position, h = p.h ?? 0
+    if (!g.current.userData.seen) { pos.set(p.x, h, p.z); g.current.userData.seen = true }
     const moving = Math.hypot(p.x - pos.x, p.z - pos.z) > 0.05
     pos.x += (p.x - pos.x) * 0.2
+    pos.y += (h - pos.y) * 0.2
     pos.z += (p.z - pos.z) * 0.2
 
     // face the camera, then pick the rotation sprite from where the camera stands relative to their facing
@@ -680,10 +889,10 @@ function Avatar({ peer, floorId, tex }: { peer: () => Peer | undefined; floorId:
     const frame = moving ? Math.floor(clock.elapsedTime * 6) % 4 : 0
     const t = tex[frame * 5 + (rot <= 5 ? rot - 1 : 9 - rot)]
     const img = t.image as HTMLImageElement
-    const w = img.width * PX, h = img.height * PX
+    const w = img.width * PX, sh = img.height * PX
     sprite.current.material.map = t
-    sprite.current.scale.set(rot > 5 ? -w : w, h, 1)
-    sprite.current.position.y = h / 2
+    sprite.current.scale.set(rot > 5 ? -w : w, sh, 1)
+    sprite.current.position.y = sh / 2
   })
   return (
     <group ref={g} visible={false}>

@@ -62,6 +62,13 @@ class Api(unittest.TestCase):
         self.assertEqual(self.upload(visitor, room, text='hola').status_code, 403)
         self.assertEqual(self.c.get('/api/museum').json['rooms'][0]['title'], 'Sala')
 
+    def test_floor_limit(self):
+        curator, _ = self.account('cura', curator=True)
+        server.db.floors.insert_many([{'name': f'{i}', 'order': i} for i in range(server.MAX_FLOORS - 1)])
+        self.assertEqual(self.c.post('/api/floors', json={'name': 'último'}, headers=curator).status_code, 201)
+        r = self.c.post('/api/floors', json={'name': 'uno más'}, headers=curator)
+        self.assertEqual((r.status_code, server.db.floors.count_documents({})), (400, server.MAX_FLOORS))
+
     def test_uploads(self):
         curator, uid = self.account('cura', curator=True)
         _, other = self.account('otro')

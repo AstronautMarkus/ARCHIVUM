@@ -34,7 +34,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const say = useRef<(text: string) => void>(() => {})
   const onChat = useCallback((m: Chat) => setChat((c) => [...c.slice(-7), { ...m, key: ++lineKey }]), [])
   const floors = museum.floors
-  const floor = floors[Math.min(floorIdx, floors.length - 1)]
+  const current = Math.min(floorIdx, floors.length - 1)
+  const floor = floors[current]
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -42,21 +43,24 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       if (e.code === 'Escape') setViewing(null)
       if (e.code === 'KeyE' && picked) { setViewing(picked); document.exitPointerLock() }
       if (e.code === 'KeyT' && user) { e.preventDefault(); setTalking(true) } // T talks, like in DOOM
-      const n = Number(e.key)
-      if (elevator && n >= 1 && n <= floors.length) setFloorIdx(n - 1)
+      if (!elevator) return
+      const n = Number(e.key), go = (k: number) => setFloorIdx(Math.max(0, Math.min(floors.length - 1, k)))
+      if (n >= 1 && n <= 9) go(n - 1)
+      if (e.code === 'PageUp') go(current + 1)
+      if (e.code === 'PageDown') go(current - 1)
     }
     addEventListener('keydown', onKey)
     return () => removeEventListener('keydown', onKey)
-  }, [picked, elevator, floors.length, user])
+  }, [picked, elevator, floors.length, current, user])
 
   if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
   return (
     <>
-      <MuseumView museum={museum} floor={floor} token={user ? getToken() : ''} quiet={!!viewing}
+      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} onFloor={setFloorIdx}
         onElevator={setElevator} onPick={setPicked} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
-          <span>ARCHIVUM · {floor.name}</span>
+          <span>ARCHIVUM · {floor.name} ({current + 1}/{floors.length})</span>
           {user
             ? <span>{user.name} · <a href="#admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
             : <button onClick={() => setLogin(true)}>Entrar / Registrarse</button>}
@@ -78,7 +82,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
           {picked && <div>[E] ver · {picked.caption || KIND[picked.kind]}</div>}
-          {elevator && <div>ASCENSOR · {floors.map((f, i) => `[${i + 1}] ${f.name}`).join('  ')}</div>}
+          {elevator && <div>ASCENSOR · piso {current + 1} de {floors.length} · [PgUp] subir · [PgDn] bajar · [1-9] ir directo</div>}
         </div>
       </div>
       {!locked && !viewing && !login && (
