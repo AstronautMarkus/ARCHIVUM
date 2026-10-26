@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  atLiftDoor, buildBuilding, solidAt, tileAt, DOOR_H, LIFT, SPAWN, STREET_X, TILE, WALL_H, type Layout, type Prop, type Slot,
+  atLiftDoor, buildBuilding, solidAt, tileAt, DOOR_H, LIFT, SPAWN, TILE, WALL_H, type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, type Exhibit, type Floor, type Museum } from './api'
 
@@ -12,9 +12,12 @@ const GOLD = '#ffcc33'
 const HAZE = '#9fd0f5' // sky at the horizon; outdoor fog fades into it
 const HAZE_COLOR = new THREE.Color(HAZE), DARK = new THREE.Color('#000')
 const STOREY = WALL_H // one floor seen from outside
-// storeys of the city buildings around the street, changing every three tiles
-const CITY = [3, 4, 2, 5, 3]
-const buildingHeight = (tx: number, tz: number) => CITY[((Math.floor((tx + tz) / 3) % 5) + 5) % 5] * STOREY + 0.5
+const PARAPET = 0.9 // how far the walls around the roof rise above it
+const BEAM = 0.4 // the edge of a floor's slab, seen from the courtyard
+// the city around the block: storeys and brick of each building, changing every three tiles
+const CITY = [[3, 0], [4, 1], [2, 2], [5, 3], [3, 1]]
+const cityBlock = (tx: number, tz: number) => ((Math.floor((tx + tz) / 3) % 5) + 5) % 5
+const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]], AROUND = [...SIDES, [1, 1], [1, -1], [-1, 1], [-1, -1]]
 const odd = ([tx, tz]: readonly number[]) => ((tx + tz) % 2 + 2) % 2 === 1 // which wall tiles get a window
 const tmp = new THREE.Vector3()
 
@@ -25,14 +28,15 @@ function retro(t: THREE.Texture, repeat = false) {
   t.needsUpdate = true
 }
 
-// a pixelated copy of a texture repeating rx times across and ry times up (negative mirrors it)
-function useTiled(tex: THREE.Texture, rx = 1, ry = 1) {
+// a pixelated copy of a texture repeating rx times across and ry times up (negative mirrors it), starting oy up
+function useTiled(tex: THREE.Texture, rx = 1, ry = 1, oy = 0) {
   return useMemo(() => {
     const t = tex.clone()
     retro(t, true)
     t.repeat.set(rx, ry)
+    t.offset.set(0, oy)
     return t
-  }, [tex, rx, ry])
+  }, [tex, rx, ry, oy])
 }
 
 // titles: gold with a black outline so they read on any wall
@@ -142,107 +146,145 @@ function withWindow(tex: THREE.Texture) {
 
 type Cell = [number, number, number] // tile x, tile z, height of the floor it belongs to
 type Box = [number, number, number, number, number, number] // center x, y, z and size x, y, z
-const OUTDOOR = 'ogp' // tiles under the open sky
+const OUTDOOR = 'osgp' // tiles under the open sky
 
 // The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
 // same draw calls. Exhibits, signs and media, the heavy part, exist only for your floor and the ones next to it.
 function World({ layouts, byRoom, quiet, current }: {
   layouts: Layout[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number
 }) {
-  const [wall, parquet, ceil, lite, facade, house, street, sidewalk, door, lobby, grass, wood, metal, panel, plate, steel, ...water] = useTexture([
+  const [wall, parquet, ceil, lite, facade, street, sidewalk, door, lobby, grass, cobbles, wood, metal, panel, plate, steel,
+    light, paint, pbrick, brick, brick1, stwall, ...water] = useTexture([
     '/doom/bigwall.png', '/doom/floor0_1.png', '/doom/ceil3_5.png', '/doom/tlite6_1.png',
-    '/doom/stonew5.png', '/doom/pbrick8.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
-    '/doom/flat18.png', '/doom/grass1.png', '/doom/wood.png', '/doom/door2_5.png',
-    '/doom/aqpanl08.png', '/doom/aqpanl05.png', '/doom/flat23.png',
+    '/doom/stonew5.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
+    '/doom/flat18.png', '/doom/grass1.png', '/doom/mflr8_3.png', '/doom/wood.png', '/doom/door2_5.png',
+    '/doom/aqpanl08.png', '/doom/aqpanl05.png', '/doom/flat23.png', '/doom/flat17.png', '/doom/pwhite.png',
+    '/doom/pbrick8.png', '/doom/brick.png', '/doom/brick1.png', '/doom/stwall.png',
     '/doom/fwater1.png', '/doom/fwater2.png', '/doom/fwater3.png', '/doom/fwater4.png',
   ])
   useMemo(() => water.forEach((t) => retro(t)), [water])
-  const [facadeWin, brickWin] = useMemo(() => [withWindow(facade), withWindow(house)], [facade, house])
+  const bricks = [pbrick, brick, brick1, stwall]
+  const [facadeWin, ...brickWin] = useMemo(() => [facade, pbrick, brick, brick1, stwall].map(withWindow), [facade, pbrick, brick, brick1, stwall])
   const ground = layouts[0]
-  const top = layouts.length * STOREY + 0.9 // the museum is as tall as its floors, plus a parapet
+  const top = layouts.length * STOREY + PARAPET // the museum is as tall as its floors, plus a parapet
   const near = (k: number) => Math.abs(k - current) <= 1
 
   // sort every tile of every floor into what gets drawn there
   const t = useMemo(() => {
     const t = {
-      inner: [] as Cell[], front: [] as Cell[], houses: [] as Cell[], doors: [] as Cell[], columns: [] as Cell[],
-      rails: [] as Box[], desk: [] as Cell[], parquet: [] as Cell[],
-      lobby: [] as Cell[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[], sidewalk: [] as Cell[],
-      ceiling: [] as Cell[],
+      inner: [] as Cell[], houses: [] as Cell[], doors: [] as Cell[], columns: [] as Cell[], desk: [] as Cell[],
+      rails: [] as Box[], beams: [] as Box[], parapet: [] as Box[], curbs: [] as Box[], paint: [] as Box[],
+      parquet: [] as Cell[], lobby: [] as Cell[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[],
+      sidewalk: [] as Cell[], ceiling: [] as Cell[], lights: [] as Cell[],
     }
     layouts.forEach((layout, k) => {
-      const y = k * STOREY
+      const y = k * STOREY, roof = k === layouts.length - 1, f = layout.footprint
       const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
       layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
-        const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz, y]
+        const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz, y], x = (tx + 0.5) * TILE, z = (tz + 0.5) * TILE
         if (c === '#') {
-          // walls touching the street are city buildings, or the museum facade on its west face (x = 0)
-          const nb = [at(tx + 1, tz), at(tx - 1, tz), at(tx, tz + 1), at(tx, tz - 1)]
-          if (nb.includes('o')) (tx === 0 ? t.front : t.houses).push(cell)
-          else if (nb.some((n) => n !== '#')) t.inner.push(cell)
-        } else if (c === 'o') (STREET_X > (tx + 0.5) * TILE ? t.street : t.sidewalk).push(cell)
-        else if (c === 'g' || c === 'F') t.grass.push(cell)
+          // the city faces the far sidewalk; the museum's walls face its own floors, and outside the skin covers them
+          if (AROUND.some(([a, b]) => at(tx + a, tz + b) === 's')) t.houses.push(cell)
+          else if (SIDES.some(([a, b]) => !('#' + OUTDOOR).includes(at(tx + a, tz + b)))) t.inner.push(cell)
+        } else if (c === 'o') {
+          t.street.push(cell)
+          // a zebra crossing in front of the door, and elsewhere a dashed line down the middle of the street
+          const { door } = layout
+          if (door && tx < 0 && Math.abs(z - door.z) < door.w / 2) for (const o of [-0.6, 0, 0.6]) t.paint.push([x + o, 0.01, z, 0.35, 0.01, TILE])
+          else if (SIDES.every(([a, b]) => at(tx + a, tz + b) === 'o')) {
+            const alongZ = tz >= f.z0 && tz <= f.z1, alongX = tx >= f.x0 && tx <= f.x1 // neither: a corner
+            if (alongX !== alongZ) t.paint.push([x, 0.01, z, alongX ? 1 : 0.12, 0.01, alongZ ? 1 : 0.12])
+          }
+        } else if (c === 's') {
+          t.sidewalk.push(cell)
+          for (const [a, b] of SIDES) { // a curb where the sidewalk meets the street or the garden
+            if ('ogp'.includes(at(tx + a, tz + b))) t.curbs.push([x + (a * TILE) / 2, 0.075, z + (b * TILE) / 2, a ? 0.2 : TILE, 0.15, b ? 0.2 : TILE])
+          }
+        } else if (c === 'g' || c === 'F') t.grass.push(cell)
         else if (c === 'p') t.path.push(cell)
         else if (c !== 'v' && c !== 'E') { // the courtyard and the elevator shaft stay open all the way up
-          t.ceiling.push(cell)
+          ;('.LB'.includes(c) && !(tx & 1) && !(tz & 1) ? t.lights : t.ceiling).push(cell) // a light every other tile
           ;(c === 'L' ? t.lobby : t.parquet).push(cell)
           if (c === 'D') t.doors.push(cell)
           if (c === 'C') t.columns.push(cell)
-          // a thin railing along the courtyard edge, running past the columns and a bit beyond each tile so the
-          // pieces meet without gaps
-          if (c === 'B' || c === 'C') {
-            for (const [a, b] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-              if (at(tx + a, tz + b) !== 'v') continue
-              t.rails.push([(tx + 0.5 + a * 0.47) * TILE, y + 0.5, (tz + 0.5 + b * 0.47) * TILE,
-                a ? 0.12 : TILE + 0.2, 1, b ? 0.12 : TILE + 0.2])
+          if (c === 'R') t.desk.push(cell)
+          for (const [a, b] of SIDES) {
+            const n = at(tx + a, tz + b)
+            // a thin railing along the courtyard edge, running past the columns and a bit beyond each tile so the
+            // pieces meet without gaps
+            if ((c === 'B' || c === 'C') && n === 'v') {
+              t.rails.push([x + a * 0.47 * TILE, y + 0.5, z + b * 0.47 * TILE, a ? 0.12 : TILE + 0.2, 1, b ? 0.12 : TILE + 0.2])
+            }
+            // where the ceiling meets the open courtyard, a stone beam shows the slab of the floor above; on the top
+            // floor it rises into the parapet around the roof
+            if (c !== 'D' && 'vgpF'.includes(n)) {
+              const lo = y + WALL_H - BEAM, hi = roof ? top : y + WALL_H
+              ;(roof ? t.parapet : t.beams).push([x + (a * TILE) / 2, (lo + hi) / 2, z + (b * TILE) / 2, a ? 0.24 : TILE + 0.24, hi - lo, b ? 0.24 : TILE + 0.24])
             }
           }
-          if (c === 'R') t.desk.push(cell)
         }
       }))
     })
-    // above the ground floor the facade is a thin skin outside the upper floors' own walls, so inside you see
-    // your floor's wall and outside the windows; only every other tile gets one
-    const h = top - STOREY
-    const skin = (cells: Cell[]): Box[] => cells.map(([tx, tz]) => [-0.1, STOREY + h / 2, (tz + 0.5) * TILE, 0.2, h, TILE])
-    const above = [...t.front, ...t.doors.filter(([tx, , y]) => tx === 0 && y === 0)]
-    const upper = { win: skin(above.filter(odd)), plain: skin(above.filter((c) => !odd(c))), h }
-    const city = [...Map.groupBy(t.houses, ([tx, tz]) => buildingHeight(tx, tz))]
-      .map(([h, cells]) => ({ h, win: cells.filter(odd), plain: cells.filter((c) => !odd(c)) }))
+    // the outside of the museum: a thin skin just outside its outer walls, a box per tile and storey with a window
+    // on every other tile, and a parapet on top, so inside you see your floor's own walls. The front door leaves a
+    // hole in the ground storey, and the north and south sides run past the ends to close the corners
+    const f = ground.footprint, skin = { win: [] as Box[], plain: [] as Box[], parapet: [] as Box[] }
+    const wrap = (tx: number, tz: number, x: number, z: number, sx: number, sz: number) => {
+      const door = tileAt(ground, (tx + 0.5) * TILE, (tz + 0.5) * TILE) === 'D'
+      for (let k = door ? 1 : 0; k < layouts.length; k++) (odd([tx, tz]) ? skin.win : skin.plain).push([x, (k + 0.5) * STOREY, z, sx, STOREY, sz])
+      skin.parapet.push([x, top - PARAPET / 2, z, sx, PARAPET, sz])
+    }
+    for (let tx = f.x0; tx <= f.x1; tx++) {
+      const end = tx === f.x0 ? -1 : tx === f.x1 ? 1 : 0
+      wrap(tx, f.z0, (tx + 0.5) * TILE + end * 0.1, f.z0 * TILE - 0.1, TILE + Math.abs(end) * 0.2, 0.2)
+      wrap(tx, f.z1, (tx + 0.5) * TILE + end * 0.1, (f.z1 + 1) * TILE + 0.1, TILE + Math.abs(end) * 0.2, 0.2)
+    }
+    for (let tz = f.z0; tz <= f.z1; tz++) {
+      wrap(f.x0, tz, f.x0 * TILE - 0.1, (tz + 0.5) * TILE, 0.2, TILE)
+      wrap(f.x1, tz, (f.x1 + 1) * TILE + 0.1, (tz + 0.5) * TILE, 0.2, TILE)
+    }
+    const city = [...Map.groupBy(t.houses, ([tx, tz]) => cityBlock(tx, tz))].map(([i, cells]) => ({
+      i, h: CITY[i][0] * STOREY + 0.5, brick: CITY[i][1], win: cells.filter(odd), plain: cells.filter((c) => !odd(c)),
+    }))
     const deskZ = t.desk.reduce((s, [, tz]) => s + (tz + 0.5) * TILE, 0) / (t.desk.length || 1)
-    return { ...t, upper, city, deskZ }
-  }, [layouts, top])
+    return { ...t, skin, city, deskZ }
+  }, [layouts, top, ground])
 
   return (
     <>
       <group name="walls">
         <WallSet cells={t.inner} tex={wall} height={WALL_H} />
-        <WallSet cells={t.front} tex={facade} height={STOREY} every={STOREY} />
-        <Boxes boxes={t.upper.win} tex={facadeWin} repeat={[1, t.upper.h / STOREY]} />
-        <Boxes boxes={t.upper.plain} tex={facade} repeat={[1, t.upper.h / STOREY]} />
-        {t.city.map(({ h, win, plain }) => (
-          <Fragment key={h}>
-            <WallSet cells={win} tex={brickWin} height={h} every={STOREY} />
-            <WallSet cells={plain} tex={house} height={h} every={STOREY} />
+        <Boxes boxes={t.skin.win} tex={facadeWin} />
+        <Boxes boxes={t.skin.plain} tex={facade} />
+        <Boxes boxes={t.skin.parapet} tex={facade} repeat={[1, PARAPET / STOREY]} />
+        {t.city.map(({ i, h, brick, win, plain }) => (
+          <Fragment key={i}>
+            <WallSet cells={win} tex={brickWin[brick]} height={h} every={STOREY} fog={false} />
+            <WallSet cells={plain} tex={bricks[brick]} height={h} every={STOREY} fog={false} />
           </Fragment>
         ))}
         <WallSet cells={t.columns} tex={facade} height={WALL_H} size={0.7} />
-        <Boxes boxes={t.rails} tex={facade} />
+        <Boxes boxes={t.rails} tex={facade} repeat={[1, 1 / TILE]} />
+        <Boxes boxes={t.beams} tex={facade} repeat={[1, BEAM / TILE]} />
+        <Boxes boxes={t.parapet} tex={facade} repeat={[1, (BEAM + PARAPET) / TILE]} />
         <WallSet cells={t.desk} tex={wood} height={1.1} every={1.1} />
       </group>
+      <Boxes boxes={t.curbs} tex={facade} repeat={[1, 0.15 / TILE]} />
+      <Boxes boxes={t.paint} tex={paint} />
       <TileSet cells={t.parquet} tex={parquet} />
       <TileSet cells={t.lobby} tex={lobby} />
       <TileSet cells={t.grass} tex={grass} />
-      <TileSet cells={t.path} tex={sidewalk} />
+      <TileSet cells={t.path} tex={cobbles} />
       <TileSet cells={t.street} tex={street} />
       <TileSet cells={t.sidewalk} tex={sidewalk} />
       <TileSet cells={t.ceiling} tex={ceil} y={WALL_H - 0.005} />
+      <TileSet cells={t.lights} tex={light} y={WALL_H - 0.005} />
       {t.doors.map(([tx, tz, y]) => tx === 0 && y === 0
-        ? <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={facade} top={STOREY} />
-        : <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} top={WALL_H} />)}
+        ? <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} outside={facade} soffit={ceil} top={STOREY} />
+        : <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} soffit={ceil} top={WALL_H} />)}
       {ground.door && (
         <>
-          <Text position={[-0.05, (DOOR_H + STOREY) / 2, ground.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} {...TITLE}>ARCHIVUM</Text>
+          <Text position={[-0.22, (DOOR_H + STOREY) / 2, ground.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} {...TITLE}>ARCHIVUM</Text>
           <FrontDoor at={ground.door} tex={door} />
         </>
       )}
@@ -283,9 +325,9 @@ function World({ layouts, byRoom, quiet, current }: {
 }
 
 // one instanced box per tile, from its floor + base up, `size` wide; the texture repeats once across and every
-// `every` meters up
-function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
-  cells: Cell[]; tex: THREE.Texture; height: number; base?: number; every?: number; size?: number
+// `every` meters up. Without fog it stays sunlit even seen from the dark inside (the city over the roofs)
+function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE, fog = true }: {
+  cells: Cell[]; tex: THREE.Texture; height: number; base?: number; every?: number; size?: number; fog?: boolean
 }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
   const map = useTiled(tex, 1, height / every)
@@ -298,13 +340,14 @@ function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
   return (
     <instancedMesh ref={ref} args={[undefined, undefined, cells.length]}>
       <boxGeometry args={[size, height, size]} />
-      <meshBasicMaterial map={map} />
+      <meshBasicMaterial map={map} fog={fog} />
     </instancedMesh>
   )
 }
 
-// one textured square per tile, y above its floor: a floor, or a ceiling facing down when y is high up
-function TileSet({ cells, tex, y = 0 }: { cells: Cell[]; tex: THREE.Texture; y?: number }) {
+// one textured square per tile, y above its floor: a floor, or a ceiling facing down when y is high up. Floors sit
+// a hair above their storey so they cover the tops of the walls below instead of flickering against them
+function TileSet({ cells, tex, y = 0.005 }: { cells: Cell[]; tex: THREE.Texture; y?: number }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
   const geometry = useMemo(() => new THREE.PlaneGeometry(TILE, TILE).rotateX(y > 1 ? Math.PI / 2 : -Math.PI / 2), [y])
   const map = useTiled(tex)
@@ -438,12 +481,17 @@ function Boxes({ boxes, tex, repeat = [1, 1] }: { boxes: Box[]; tex: THREE.Textu
   )
 }
 
-function Lintel({ tx, tz, y, tex, top }: { tx: number; tz: number; y: number; tex: THREE.Texture; top: number }) {
-  const map = useTiled(tex, 1, (top - DOOR_H) / TILE)
+// the wall over a doorway: its bricks carry on from the walls beside it, the side facing -x can be different (the
+// street, over the front door), and its underside is ceiling
+function Lintel({ tx, tz, y, tex, outside = tex, soffit, top }: {
+  tx: number; tz: number; y: number; tex: THREE.Texture; outside?: THREE.Texture; soffit: THREE.Texture; top: number
+}) {
+  const h = top - DOOR_H
+  const map = useTiled(tex, 1, h / TILE, DOOR_H / TILE), out = useTiled(outside, 1, h / TILE, DOOR_H / TILE), under = useTiled(soffit)
   return (
     <mesh position={[(tx + 0.5) * TILE, y + (DOOR_H + top) / 2, (tz + 0.5) * TILE]}>
-      <boxGeometry args={[TILE, top - DOOR_H, TILE]} />
-      <meshBasicMaterial map={map} />
+      <boxGeometry args={[TILE, h, TILE]} />
+      {[map, out, map, under, map, map].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
     </mesh>
   )
 }
@@ -546,9 +594,11 @@ function makeSakura() {
 // shortcut: props are walk-through; mark their tiles solid if people start hiding inside trees
 function Props({ props }: { props: Prop[] }) {
   const sakura = useMemo(makeSakura, [])
-  const art = { tree: useTexture('/doom/smita0.png'), lamp: useTexture('/doom/tlmpa0.png'), sakura }
-  useMemo(() => { retro(art.tree); retro(art.lamp); retro(art.sakura) }, [art.tree, art.lamp, art.sakura])
-  const scale = { tree: 1.6, lamp: 1, sakura: 1.75 } // trees a bit bigger than Doom size so they read as trees
+  const [tree, lamp, statue, light] = useTexture(['/doom/smita0.png', '/doom/tlmpa0.png', '/doom/smt2a0.png', '/doom/colua0.png'])
+  const art = { tree, lamp, statue, light, sakura }
+  useMemo(() => [tree, lamp, statue, light, sakura].forEach((t) => retro(t)), [tree, lamp, statue, light, sakura])
+  // trees a bit bigger than Doom size so they read as trees
+  const scale = { tree: 1.6, lamp: 1, sakura: 1.75, statue: 1.5, light: 1 }
   // upright billboards like in Doom: they turn toward you around the vertical axis only, so looking down
   // doesn't tilt them off the ground
   const meshes = useRef<THREE.Mesh[]>([])

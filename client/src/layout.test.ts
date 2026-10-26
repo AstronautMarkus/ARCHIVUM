@@ -36,7 +36,7 @@ test('the ground floor: street, front door, lobby, courtyard and rooms all conne
   assert.equal(tileAt(l, l.door!.x, l.door!.z + 1), 'D')
   assert.equal(tileAt(l, l.court!.fountain.x, l.court!.fountain.z), 'F')
   assert.ok(reachableAll(l))
-  for (const p of l.props) assert.ok('og'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside`)
+  for (const p of l.props) assert.ok('gps'.includes(tileAt(l, p.x, p.z)), `${p.kind} stands outside, off the street`)
   assert.ok(l.props.some((p) => p.kind === 'sakura'))
 })
 
@@ -49,7 +49,20 @@ test('the elevator shaft is in the same place on every floor, its doors facing t
     for (const z of [13.8, 14.2]) assert.notEqual(tileAt(l, LIFT.x0 + 1, z), 'E', 'the entrance axis (z = 14) stays clear')
     assert.ok(reachableAll(l))
   }
-  assert.equal(new Set(floors.map((l) => l.rows[0].length + l.x0)).size, 1, 'every floor is as long as the longest')
+})
+
+test('the building is the same box on every floor, with the street going all the way around it', () => {
+  const floors = buildBuilding([rooms([2]), rooms([30, 1, 1, 1]), rooms([])])
+  assert.equal(new Set(floors.map((l) => JSON.stringify(l.footprint))).size, 1)
+  const [g] = floors, f = g.footprint
+  for (const l of floors) assert.ok(l.rooms.flatMap((r) => r.slots).every((s) => s.z > f.z0 * TILE && s.z < (f.z1 + 1) * TILE))
+  // walking straight out from each side: garden walk, garden, sidewalk, street, sidewalk, then the city
+  for (const [tx, tz, dx, dz] of [[f.x0, -1, -1, 0], [f.x1, 3, 1, 0], [9, f.z0, 0, -1], [9, f.z1, 0, 1]]) {
+    let way = ''
+    for (let k = 1; k <= 10; k++) way += tileAt(g, (tx + dx * k + 0.5) * TILE, (tz + dz * k + 0.5) * TILE)
+    assert.match(way, /^p+g+s+o+s+#$/)
+  }
+  assert.match([...Array(10)].map((_, k) => tileAt(g, -(k + 0.5) * TILE, 7 * TILE)).join(''), /^p+s+o+s+#$/, 'a walk to the door')
 })
 
 test('columns only block their shaft, so you can walk right up to them', () => {

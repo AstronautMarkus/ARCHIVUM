@@ -12,9 +12,9 @@ Arte: texturas y sprites de [Freedoom](https://freedoom.github.io) (licencia BSD
 
 ## Correr en local
 
-```sh
-docker compose up -d                          # MongoDB en localhost:27017
+Necesitas MongoDB corriendo en `localhost:27017` (o apunta `MONGO_URL` a tu base).
 
+```sh
 cd server
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/gunicorn -w 1 --threads 50 --reload -b 127.0.0.1:8000 app:app

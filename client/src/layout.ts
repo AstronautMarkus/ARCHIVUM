@@ -1,11 +1,13 @@
 // Turns the museum into tile maps, one per floor; floors stack WALL_H apart. Tile (tx, tz) covers
 // world [tx*TILE, (tx+1)*TILE). Every floor is a school-like ring: a lobby at the west end, corridors along the
 // north and south sides of a central courtyard, and the rooms outside the corridors.
-// On the ground floor you come in from the street through the lobby, which has the reception desk, and the
-// courtyard has grass, paths, a fountain and cherry trees. Upper floors look down into it from balconies.
+// The building is the same box on every floor and stands in the middle of its city block: on the ground floor a
+// garden, a sidewalk and a street go all the way around it, with the city beyond. You come in from the street
+// through the lobby, which has the reception desk, and the courtyard has grass, paths, a fountain and cherry
+// trees. Upper floors look down into it from balconies.
 // A glass elevator rides up and down the courtyard's west edge, its doors opening onto the lobby of each floor.
 // Rooms have a fixed width and grow in depth with their exhibits, so new content never moves existing rooms;
-// more rooms only make the building (and its courtyard) longer, the same for every floor.
+// more rooms only make the building (and its courtyard) longer, the same for every floor, and push the block out.
 export const TILE = 2
 export const WALL_H = 3.5 // also one storey: floors stack with no gap
 export const DOOR_H = 2.2
@@ -20,26 +22,29 @@ export const LIFT = { tx: 6, tz0: 4, tz1: 5, x0: 6 * TILE, z: 5 * TILE, w: 2 * T
 const ROOM_W = 5
 // rows of the ring: corridor 0-1, arcade 2, courtyard 3-10, arcade 11, corridor 12-13
 const RING_END = 13, COURT_Z0 = 3, COURT_Z1 = 10, LOBBY_X1 = 5, COURT_X0 = 7
-const OUT_W = 10, STREET_W = 5, PLAZA_Z0 = -1, PLAZA_Z1 = 14
-export const STREET_X = -(OUT_W - STREET_W) * TILE // west of this the ground is street, east is sidewalk
+// the block around the building, by distance from its outer walls in tiles: a stone walk, the garden, the
+// sidewalk, the street and the far sidewalk; past that, the city
+const BLOCK = 'pgggsooos'
 
 export type RoomIn = { id: string; title: string; count: number }
 export type Slot = { x: number; z: number; rot: number } // a point on a wall surface, rot faces into the room
-export type Prop = { kind: 'tree' | 'lamp' | 'sakura'; x: number; z: number }
+export type Prop = { kind: 'tree' | 'lamp' | 'sakura' | 'statue' | 'light'; x: number; z: number }
 export type Layout = {
   // rows[tz - z0][tx - x0]: SOLID tiles, '.' floor, 'L' lobby, 'D' doorway, 'C' column, 'E' elevator shaft,
-  // 'B' balcony (floor with a railing on its courtyard side), and under the open sky 'o' street/sidewalk,
+  // 'B' balcony (floor with a railing on its courtyard side), and under the open sky 'o' street, 's' sidewalk,
   // 'g' grass, 'p' path
   rows: string[]
   x0: number
   z0: number
+  footprint: { x0: number; x1: number; z0: number; z1: number } // the building's outer walls, in tiles (inclusive)
   start: { x: number; z: number } // where a visitor appears when they arrive at the museum
   props: Prop[]
   rooms: { id: string; title: string; sign: Slot; slots: Slot[] }[]
   door?: { x: number; z: number; w: number } // the front door (ground floor), world units
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
 }
-type Options = { ground?: boolean; courtX1?: number }
+// north and south: how deep the deepest room on that side goes
+type Options = { ground?: boolean; courtX1?: number; north?: number; south?: number }
 
 // frame on the wall behind floor tile (tx, tz); (nx, nz) is the wall's inward normal
 const wallSlot = (tx: number, tz: number, nx: number, nz: number): Slot => ({
@@ -50,22 +55,25 @@ const wallSlot = (tx: number, tz: number, nx: number, nz: number): Slot => ({
 const prop = (kind: Prop['kind'], tx: number, tz: number): Prop => ({ kind, x: (tx + 0.5) * TILE, z: (tz + 0.5) * TILE })
 // last column the rooms of a floor use; the courtyard is at least 10 tiles long
 const courtEnd = (rooms: number) => Math.max(COURT_X0 + 9, COURT_X0 + Math.ceil(rooms / 2) * (ROOM_W + 1) - 2)
+const roomDepth = (r: RoomIn) => Math.max(3, Math.ceil((r.count - ROOM_W) / 2))
+// rooms alternate north (even) and south (odd) of the courtyard
+const reach = (rooms: RoomIn[], side: number) => Math.max(0, ...rooms.filter((_, i) => i % 2 === side).map(roomDepth))
 
-// all floors share the length of the longest one
+// all floors share the length of the longest one and the depth of the deepest rooms, so the building is a box
 export function buildBuilding(floors: RoomIn[][]): Layout[] {
   const courtX1 = Math.max(...floors.map((rooms) => courtEnd(rooms.length)))
-  return floors.map((rooms, k) => buildFloor(rooms, { ground: k === 0, courtX1 }))
+  const north = Math.max(...floors.map((rooms) => reach(rooms, 0))), south = Math.max(...floors.map((rooms) => reach(rooms, 1)))
+  return floors.map((rooms, k) => buildFloor(rooms, { ground: k === 0, courtX1, north, south }))
 }
 
-export function buildFloor(rooms: RoomIn[], { ground = false, courtX1 = courtEnd(rooms.length) }: Options = {}): Layout {
-  const depth = rooms.map((r) => Math.max(3, Math.ceil((r.count - ROOM_W) / 2)))
-  const maxN = Math.max(0, ...depth.filter((_, i) => i % 2 === 0))
-  const maxS = Math.max(0, ...depth.filter((_, i) => i % 2 === 1))
+export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
+  const { ground = false, courtX1 = courtEnd(rooms.length), north = reach(rooms, 0), south = reach(rooms, 1) } = opts
+  const depth = rooms.map(roomDepth)
   const end = courtX1 + 3 // last walkable column: the east corridor
-  const x0 = ground ? -OUT_W - 1 : 0
-  const z0 = Math.min(-2 - maxN, ground ? PLAZA_Z0 - 1 : 0)
-  const z1 = Math.max(RING_END + 2 + maxS, ground ? PLAZA_Z1 + 1 : 0)
-  const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(end + 2 - x0).fill('#'))
+  const box = { x0: 0, x1: end + 1, z0: -2 - north, z1: RING_END + 2 + south }
+  const m = ground ? BLOCK.length + 1 : 0 // the ground floor holds the block too, and a ring of city around it
+  const x0 = box.x0 - m, z0 = box.z0 - m, z1 = box.z1 + m
+  const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(box.x1 + m + 1 - x0).fill('#'))
   const set = (tx: number, tz: number, c: string) => { grid[tz - z0][tx - x0] = c }
   const fill = (xa: number, xb: number, za: number, zb: number, c: string) => {
     for (let tx = xa; tx <= xb; tx++) for (let tz = za; tz <= zb; tz++) set(tx, tz, c)
@@ -93,10 +101,19 @@ export function buildFloor(rooms: RoomIn[], { ground = false, courtX1 = courtEnd
     }
   }
   fill(LIFT.tx, LIFT.tx, LIFT.tz0, LIFT.tz1, 'E')
+  // how far (tx, tz) is out from the building's outer walls along x and along z, in tiles; 0 or less is inside
+  const away = (tx: number, tz: number) => [Math.max(box.x0 - tx, tx - box.x1), Math.max(box.z0 - tz, tz - box.z1)]
+  // is (tx, tz) out in front of the door, give or take `spare` rows?
+  const byDoor = (tx: number, tz: number, spare = 0) => tx < 0 && tz >= 6 - spare && tz <= 7 + spare
   if (ground) {
     fill(2, 2, 2, 4, 'R') // reception desk, on your left as you come in
     fill(0, 0, 6, 7, 'D') // double front door
-    fill(-OUT_W, -1, PLAZA_Z0, PLAZA_Z1, 'o')
+    for (let tx = x0 + 1; tx < box.x1 + m; tx++) {
+      for (let tz = z0 + 1; tz < z1; tz++) {
+        const d = Math.max(...away(tx, tz)), c = BLOCK[d - 1]
+        if (d > 0) set(tx, tz, c === 'g' && byDoor(tx, tz) ? 'p' : c) // a walk through the garden to the door
+      }
+    }
   }
 
   const out = rooms.map((r, i) => {
@@ -118,16 +135,27 @@ export function buildFloor(rooms: RoomIn[], { ground = false, courtX1 = courtEnd
   })
 
   const rows = grid.map((r) => r.join(''))
-  if (!ground) return { rows, x0, z0, start: SPAWN, props: [], rooms: out }
+  if (!ground) return { rows, x0, z0, footprint: box, start: SPAWN, props: [], rooms: out }
 
-  // street trees, lamps flanking the door, cherry trees along both long sides of the courtyard
-  const props = [...[0, 3, 10, 13].map((tz) => prop('tree', -5, tz)), prop('lamp', -1, 5), prop('lamp', -1, 8)]
+  // lamps flanking the door and lights at the garden gate; trees around the garden with a statue on each corner,
+  // lamps along the sidewalk, and cherry trees along both long sides of the courtyard
+  const mid = (c: string) => (BLOCK.indexOf(c) + BLOCK.lastIndexOf(c)) / 2 + 1 // how far out a band's middle is
+  const garden = mid('g'), gate = BLOCK.lastIndexOf('g') + 1, sidewalk = BLOCK.indexOf('s') + 1
+  const props = [prop('lamp', -1, 5), prop('lamp', -1, 8), prop('light', -gate, 5), prop('light', -gate, 8)]
+  for (let tx = x0; tx <= box.x1 + m; tx++) {
+    for (let tz = z0; tz <= z1; tz++) {
+      const [dx, dz] = away(tx, tz), d = Math.max(dx, dz), n = (((tx + tz) % 12) + 12) % 12
+      if (dx === garden && dz === garden) props.push(prop('statue', tx, tz))
+      else if (!byDoor(tx, tz, 2) && d === garden && n % 3 === 0) props.push(prop('tree', tx, tz))
+      else if (!byDoor(tx, tz, 2) && d === sidewalk && n % 4 === 0) props.push(prop('lamp', tx, tz))
+    }
+  }
   for (let tx = COURT_X0 + 1; tx < courtX1; tx += 3) {
     if (tx < mx - 1 || tx > mx + 2) props.push(prop('sakura', tx, COURT_Z0 + 1), prop('sakura', tx, COURT_Z1 - 1))
   }
   return {
-    rows, x0, z0, props, rooms: out,
-    start: { x: (-OUT_W + 2.5) * TILE, z: 7 * TILE }, // in the street, facing the door
+    rows, x0, z0, footprint: box, props, rooms: out,
+    start: { x: (box.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
     door: { x: 0.5 * TILE, z: 7 * TILE, w: 2 * TILE },
     court: {
       x0: COURT_X0 * TILE, x1: (courtX1 + 1) * TILE, z0: COURT_Z0 * TILE, z1: (COURT_Z1 + 1) * TILE,
