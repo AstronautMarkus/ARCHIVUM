@@ -14,10 +14,14 @@ export const TILE = 2
 export const WALL_H = 3.5 // also one storey: floors stack with no gap
 export const DOOR_H = 2.2
 export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE } // a safe spot in the lobby, on every floor
-// wall, fountain, reception desk, courtyard void, the shrine's hall; columns, trees and the elevator are special
+// wall, fountain, reception desk, courtyard void, the shrine's hall; posts and the elevator are special
 export const SOLID = '#FRvH'
 export const MAX_FLOORS = 99
 export const COLUMN = 0.35 // half the width of a column
+export const TORII = 2.3 // how far each pillar of the shrine's torii stands from the middle of its path
+// what stops you around each prop, as half the width of its trunk, post or base
+const BODY = { tree: COLUMN, oak: COLUMN, sakura: 0.25, statue: 0.45, lamp: 0.2, light: 0.25 }
+const LANTERN = 0.3, PILLAR = 0.25 // the shrine's stone lanterns and the torii's pillars
 // the elevator shaft: two tiles wide on the courtyard's west edge, beside the entrance axis (rows 6-7) so walking
 // in from the street you see straight into the courtyard; its doors face the lobby. z: center, w: width along z,
 // door: width of the opening, which leaves room on both sides for the open doors to slide away
@@ -34,6 +38,8 @@ const WILD = 20
 
 export type RoomIn = { id: string; title: string; count: number }
 export type Slot = { x: number; z: number; rot: number } // a point on a wall surface, rot faces into the room
+// something you walk right up to and around: it stops you only within r of (x, z), a square like a column's
+export type Post = { x: number; z: number; r: number }
 export type Prop = { kind: 'tree' | 'oak' | 'lamp' | 'sakura' | 'statue' | 'light'; x: number; z: number; s?: number } // s: scale
 export type Layout = {
   // rows[tz - z0][tx - x0]: SOLID tiles, '.' floor, 'L' lobby, 'D' doorway, 'C' column, 'E' elevator shaft,
@@ -48,7 +54,10 @@ export type Layout = {
   rooms: { id: string; title: string; sign: Slot; slots: Slot[] }[]
   door?: { x: number; z: number; w: number } // the front door (ground floor), world units
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
-  shrine?: { x: number; z: number; w: number; d: number; gate: number } // its hall, and the z of its torii; world units
+  // the shrine's hall, the z of its torii and where its lanterns stand; world units
+  shrine?: { x: number; z: number; w: number; d: number; gate: number; lanterns: { x: number; z: number }[] }
+  // columns, tree trunks, lamp posts, statues...: at most one per tile and wholly inside it, keyed `${tx},${tz}`
+  posts: Map<string, Post>
 }
 
 // a fixed pseudo-random number in [0, 1) per tile (and salt k), so everyone sees the same forest and city
@@ -95,6 +104,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   const x0 = box.x0 - m - wild, z0 = box.z0 - m - wild, z1 = box.z1 + m
   const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(box.x1 + m + 1 - x0).fill('#'))
   const set = (tx: number, tz: number, c: string) => { grid[tz - z0][tx - x0] = c }
+  const posts = new Map<string, Post>()
+  const post = (x: number, z: number, r: number) => posts.set(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`, { x, z, r })
   const fill = (xa: number, xb: number, za: number, zb: number, c: string) => {
     for (let tx = xa; tx <= xb; tx++) for (let tz = za; tz <= zb; tz++) set(tx, tz, c)
   }
@@ -116,7 +127,10 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
       const edgeX = tx === ax || tx === bx, edgeZ = tz === az || tz === bz
       if (!edgeX && !edgeZ) continue
       const along = edgeX ? tz - az : tx - ax, length = edgeX ? bz - az : bx - ax
-      if ((edgeX && edgeZ) || (along % 4 === 0 && along < length - 1)) set(tx, tz, 'C') // never two side by side
+      if ((edgeX && edgeZ) || (along % 4 === 0 && along < length - 1)) { // never two side by side
+        set(tx, tz, 'C')
+        post((tx + 0.5) * TILE, (tz + 0.5) * TILE, COLUMN)
+      }
       else if (!ground) set(tx, tz, 'B')
     }
   }
@@ -159,7 +173,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     return { id: r.id, title: r.title, sign, slots: slots.slice(0, r.count) }
   })
 
-  if (!ground) return { rows: grid.map((r) => r.join('')), x0, z0, footprint: box, start: SPAWN, props: [], rooms: out }
+  if (!ground) return { rows: grid.map((r) => r.join('')), x0, z0, footprint: box, start: SPAWN, props: [], rooms: out, posts }
 
   // the shrine grounds, in the corner between the forest and the houses: a clearing in the trees, and down its
   // middle a path two tiles wide from the street, through the torii, up to the hall
@@ -196,29 +210,35 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   }
   for (const tz of [sz + 3, sz + 7]) props.push(prop('sakura', px - 3, tz), prop('sakura', px + 4, tz))
   props.push(prop('statue', px - 1, sz + 7), prop('statue', px + 2, sz + 7))
+  for (const p of props) post(p.x, p.z, BODY[p.kind])
+  // the torii two tiles in from the street, and pairs of lanterns every three tiles from there to near the hall
+  const cx = (px + 1) * TILE, gateZ = (sz + WILD - 1.5) * TILE, lanterns: { x: number; z: number }[] = []
+  for (const s of [-1, 1]) {
+    post(cx + s * TORII, gateZ, PILLAR)
+    for (let j = WILD - 3.5; j > 7.5; j -= 3) lanterns.push({ x: cx + s * 2.6, z: (sz + j) * TILE })
+  }
+  for (const l of lanterns) post(l.x, l.z, LANTERN)
   return {
-    rows: grid.map((r) => r.join('')), x0, z0, footprint: box, props, rooms: out,
+    rows: grid.map((r) => r.join('')), x0, z0, footprint: box, props, rooms: out, posts,
     start: { x: (box.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
     door: { x: 0.5 * TILE, z: 7 * TILE, w: 2 * TILE },
     court: {
       x0: COURT_X0 * TILE, x1: (courtX1 + 1) * TILE, z0: COURT_Z0 * TILE, z1: (COURT_Z1 + 1) * TILE,
       fountain: { x: (mx + 1) * TILE, z: (mz + 1) * TILE },
     },
-    shrine: { x: (px + 1) * TILE, z: (sz + 5) * TILE, w: 4 * TILE, d: 2 * TILE, gate: (sz + WILD - 1.5) * TILE },
+    shrine: { x: cx, z: (sz + 5) * TILE, w: 4 * TILE, d: 2 * TILE, gate: gateZ, lanterns },
   }
 }
 
 export const tileAt = (l: Layout | undefined, x: number, z: number) =>
   l?.rows[Math.floor(z / TILE) - l.z0]?.[Math.floor(x / TILE) - l.x0] ?? '#'
 
-// does something stop you at (x, z)? whole tiles for SOLID ones, only the shaft for a column or the trunk for a
-// tree so you can walk right up to them; the elevator shaft is up to whoever drives the car
+// does something stop you at (x, z)? whole tiles for SOLID ones, only the post on a tile that has one (a column, a
+// trunk...) so you can walk right up to it; the elevator shaft is up to whoever drives the car
 export function solidAt(l: Layout | undefined, x: number, z: number) {
-  const t = tileAt(l, x, z)
-  if (t !== 'C' && t !== 'T') return SOLID.includes(t)
-  const tx = Math.floor(x / TILE), tz = Math.floor(z / TILE)
-  const c = t === 'T' ? trunk(tx, tz) : { x: (tx + 0.5) * TILE, z: (tz + 0.5) * TILE }
-  return Math.abs(x - c.x) < COLUMN && Math.abs(z - c.z) < COLUMN
+  const p = l?.posts.get(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`)
+  if (p) return Math.abs(x - p.x) < p.r && Math.abs(z - p.z) < p.r
+  return SOLID.includes(tileAt(l, x, z))
 }
 
 // is (x, z) in the lobby right in front of the elevator?

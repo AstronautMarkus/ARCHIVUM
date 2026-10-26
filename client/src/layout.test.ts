@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, trunk, COLUMN, LIFT, SOLID, SPAWN, TILE } from './layout.ts'
+import { atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, trunk, COLUMN, LIFT, SOLID, SPAWN, TILE, TORII } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
 const walkable = (c: string) => !SOLID.includes(c)
@@ -110,7 +110,22 @@ test('past the city: a forest to the west, houses to the north and a shrine in t
   const i = tiles.indexOf('T'), w = g.rows[0].length, tx = (i % w) + g.x0, tz = Math.floor(i / w) + g.z0, t = trunk(tx, tz)
   assert.ok(solidAt(g, t.x, t.z))
   assert.ok(!solidAt(g, t.x + COLUMN + 0.1, t.z))
+  // so do the torii's pillars and the lanterns, but not the path between them
+  for (const sx of [-1, 1]) assert.ok(solidAt(g, s.x + sx * TORII, s.gate))
+  assert.ok(!solidAt(g, s.x, s.gate))
+  for (const l of s.lanterns) assert.ok(solidAt(g, l.x, l.z))
   // the houses north of the block line alleys you can walk down from the sidewalk
   assert.equal(tileAt(g, 9.5 * TILE, (g.footprint.z0 - 10.5) * TILE), 's')
   assert.ok(reachableAll(g))
+})
+
+test('every prop stops you where it stands, and each post fits inside its own tile', () => {
+  const [g] = buildBuilding([rooms([2, 3, 9])])
+  for (const p of g.props) assert.ok(solidAt(g, p.x, p.z), `${p.kind} stops you`)
+  for (const [key, p] of g.posts) {
+    const corners = [[-1, -1], [1, 1]].map(([a, b]) => `${Math.floor((p.x + a * p.r) / TILE)},${Math.floor((p.z + b * p.r) / TILE)}`)
+    assert.deepEqual(corners, [key, key], 'one tile is all solidAt has to look at')
+  }
+  const columns = g.rows.join('').split('C').length - 1, s = g.shrine!
+  assert.equal(g.posts.size, columns + g.props.length + 2 + s.lanterns.length, 'never two on one tile')
 })

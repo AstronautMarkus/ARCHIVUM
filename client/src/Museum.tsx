@@ -3,7 +3,7 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import {
-  atLiftDoor, buildBuilding, noise, solidAt, tileAt, DOOR_H, LIFT, SPAWN, TILE, WALL_H, type Layout, type Prop, type Slot,
+  atLiftDoor, buildBuilding, noise, solidAt, tileAt, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H, type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, type Exhibit, type Floor, type Museum } from './api'
 
@@ -628,7 +628,6 @@ const BLOSSOM = ['#e98aab', '#f4a7c0', '#f7c6d9', '#fbe0ea'], LEAVES = ['#1e3b3c
 // how much bigger than Doom size each prop is drawn, so trees read as trees
 const SCALE = { tree: 1.6, oak: 2.2, lamp: 1, sakura: 1.75, statue: 1.5, light: 1 }
 
-// shortcut: props other than trees are walk-through; give them solid tiles if people start hiding inside them
 function Props({ props }: { props: Prop[] }) {
   const sakura = useMemo(() => makeTree(BLOSSOM), []), oak = useMemo(() => makeTree(LEAVES), [])
   const [tree, lamp, statue, light] = useTexture(['/doom/smita0.png', '/doom/tlmpa0.png', '/doom/smt2a0.png', '/doom/colua0.png'])
@@ -680,17 +679,10 @@ const RED = '#c22f2a', INK = '#1d1a1a', GILT = '#d6a419', STRAW = '#d9c27a'
 // a wooden hall on a stone base under a bark roof, with a straw rope, a bell and an offering box on its porch
 function Shrine({ at, tex }: { at: NonNullable<Layout['shrine']>; tex: Record<'wood' | 'bark' | 'stone' | 'lamp', THREE.Texture> }) {
   const { x, z, w, d, gate } = at
-  // pairs of lanterns every three tiles from just past the torii to just short of the hall
-  const lanterns = useMemo(() => {
-    const stone: Box[] = [], lit: Box[] = []
-    for (let lz = gate - 2 * TILE; lz > z + d / 2 + 1.5 * TILE; lz -= 3 * TILE) {
-      for (const lx of [x - 2.6, x + 2.6]) {
-        stone.push([lx, 0.15, lz, 0.6, 0.3, 0.6], [lx, 0.65, lz, 0.2, 0.7, 0.2], [lx, 1.45, lz, 0.75, 0.14, 0.75], [lx, 1.58, lz, 0.2, 0.14, 0.2])
-        lit.push([lx, 1.19, lz, 0.42, 0.38, 0.42])
-      }
-    }
-    return { stone, lit }
-  }, [x, z, d, gate])
+  const lanterns = useMemo(() => ({
+    stone: at.lanterns.flatMap(({ x, z }): Box[] => [[x, 0.15, z, 0.6, 0.3, 0.6], [x, 0.65, z, 0.2, 0.7, 0.2], [x, 1.45, z, 0.75, 0.14, 0.75], [x, 1.58, z, 0.2, 0.14, 0.2]]),
+    lit: at.lanterns.map(({ x, z }): Box => [x, 1.19, z, 0.42, 0.38, 0.42]),
+  }), [at.lanterns])
   const lattice = useTiled(useMemo(makeLattice, []), 8, 3)
   const wood = useTiled(tex.wood, 3, 2), bark = useTiled(tex.bark, 4, 2), stone = useTiled(tex.stone, w / TILE, 0.3)
   // the walls stand 2.4 high on a 0.6 base, set back to leave a porch in front. The roof: an attic box turned 45°
@@ -706,8 +698,8 @@ function Shrine({ at, tex }: { at: NonNullable<Layout['shrine']>; tex: Record<'w
       <group position={[x, 0, gate]}>
         {[-1, 1].map((s) => (
           <Fragment key={s}>
-            <mesh position={[s * 2.2, 2.2, 0]}><cylinderGeometry args={[0.16, 0.2, 4.4, 8]} />{red}</mesh>
-            <mesh position={[s * 2.2, 0.2, 0]}><cylinderGeometry args={[0.25, 0.25, 0.4, 8]} />{ink}</mesh>
+            <mesh position={[s * TORII, 2.2, 0]}><cylinderGeometry args={[0.16, 0.2, 4.4, 8]} />{red}</mesh>
+            <mesh position={[s * TORII, 0.2, 0]}><cylinderGeometry args={[0.25, 0.25, 0.4, 8]} />{ink}</mesh>
           </Fragment>
         ))}
         <mesh position-y={3.5}><boxGeometry args={[5.4, 0.22, 0.18]} />{red}</mesh>
