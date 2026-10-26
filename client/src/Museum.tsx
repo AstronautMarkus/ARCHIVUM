@@ -6,8 +6,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
   atLiftDoor, buildBuilding, noise, solidAt, tileAt, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H, type Layout, type Prop, type Slot,
 } from './layout'
-import { fileUrl, type Exhibit, type Floor, type Museum } from './api'
-import { cantera, ceiling, concrete, limestone, railing, spots, whiteBrick } from './textures'
+import { fileUrl, floorColor, type Exhibit, type Floor, type Museum } from './api'
+import { cantera, ceiling, checker, limestone, railing, spots, whiteBrick } from './textures'
 
 const EYE = 1.6
 const GOLD = '#ffcc33'
@@ -79,7 +79,7 @@ export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, on
       <primitive key={view} attach="background" object={VIEWS[view].thick ? fog.color : sky} />
       <primitive attach="fog" object={fog} />
       <Suspense fallback={null}>
-        <World layouts={layouts} byRoom={byRoom} quiet={quiet} current={floor} view={view} />
+        <World layouts={layouts} colors={museum.floors.map(floorColor)} byRoom={byRoom} quiet={quiet} current={floor} view={view} />
         <Avatars floorId={museum.floors[floor]?.id ?? ''} token={token} onChanged={onChanged} onChat={onChat} say={say} />
       </Suspense>
       <Player layouts={layouts} floor={floor} view={view} onFloor={onFloor} onElevator={onElevator} onPick={onPick} />
@@ -180,12 +180,14 @@ const OUTDOOR = 'osgpT' // tiles under the open sky
 
 // The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
 // same draw calls. Exhibits, signs and media, the heavy part, exist only for your floor and the ones next to it.
-function World({ layouts, byRoom, quiet, current, view }: {
-  layouts: Layout[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number; view: View
+function World({ layouts, colors, byRoom, quiet, current, view }: {
+  layouts: Layout[]; colors: string[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number; view: View
 }) {
   // the museum is a white gallery with a stone arcade (see textures.ts); Freedoom's art is for the city, the street,
   // the shrine and the elevator
-  const [wall, floor, lobby, ceil, spot, stone, iron] = useMemo(() => [whiteBrick(), concrete(), limestone(), ceiling(), spots(), cantera(), railing()], [])
+  const [wall, lobby, ceil, spot, stone, iron] = useMemo(() => [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing()], [])
+  const palette = colors.join()
+  const marble = useMemo(() => colors.map(checker), [palette]) // one floor pattern per storey, in its own color
   const [lite, facade, street, sidewalk, door, grass, cobbles, wood, metal, panel, plate, steel,
     light, paint, pbrick, brick, brick1, stwall, bark, ...water] = useTexture([
     '/doom/tlite6_1.png', '/doom/stonew5.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
@@ -207,7 +209,7 @@ function World({ layouts, byRoom, quiet, current, view }: {
     const t = {
       inner: [] as Cell[], houses: [] as Cell[], doors: [] as Cell[], columns: [] as Cell[], desk: [] as Cell[],
       rails: [] as Box[], beams: [] as Box[], parapet: [] as Box[], curbs: [] as Box[], paint: [] as Box[],
-      floor: [] as Cell[], lobby: [] as Cell[], arches: [] as Arch[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[],
+      floors: layouts.map(() => [] as Cell[]), arches: [] as Arch[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[],
       sidewalk: [] as Cell[], ceiling: [] as Cell[], lights: [] as Cell[],
     }
     layouts.forEach((layout, k) => {
@@ -237,7 +239,7 @@ function World({ layouts, byRoom, quiet, current, view }: {
         else if (c === 'p') t.path.push(cell)
         else if (c !== 'v' && c !== 'E') { // the courtyard and the elevator shaft stay open all the way up
           ;('.LB'.includes(c) && !(tx & 1) && !(tz & 1) ? t.lights : t.ceiling).push(cell) // a light every other tile
-          ;(c === 'L' ? t.lobby : t.floor).push(cell)
+          t.floors[k].push(cell)
           if (c === 'D') t.doors.push(cell)
           if (c === 'C') {
             t.columns.push(cell)
@@ -321,8 +323,7 @@ function World({ layouts, byRoom, quiet, current, view }: {
       </mesh>
       <Boxes boxes={t.curbs} tex={facade} repeat={[1, 0.15 / TILE]} />
       <Boxes boxes={t.paint} tex={paint} />
-      <TileSet cells={t.floor} tex={floor} />
-      <TileSet cells={t.lobby} tex={lobby} />
+      {t.floors.map((cells, k) => <TileSet key={k} cells={cells} tex={marble[k]} />)}
       <TileSet cells={t.grass} tex={grass} />
       <TileSet cells={t.path} tex={cobbles} />
       <TileSet cells={t.street} tex={street} />

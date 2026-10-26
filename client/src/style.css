@@ -34,10 +34,12 @@ label { display: grid; gap: 2px; }
 .cols h2 { margin: 0; }
 .cols ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .cols li { display: flex; gap: 6px; align-items: center; }
-.cols li > button:first-child { flex: 1; text-align: left; background: #1c1912; color: var(--fg); }
+.cols li > button:first-child, .cols li > .swatch + button { flex: 1; text-align: left; background: #1c1912; color: var(--fg); }
 .cols li > button.sel { background: var(--accent); color: var(--bg); }
 .cols li img { width: 40px; height: 40px; object-fit: cover; }
 .row { display: flex; gap: 6px; }
+.row input[type=color] { width: 44px; flex: none; padding: 0 2px; }
+.swatch { width: 18px; height: 18px; flex: none; border: 1px solid var(--line); }
 .check { display: flex; gap: 8px; align-items: center; }
 .check input { width: auto; }
 .chat { position: absolute; top: 44px; left: 16px; width: min(520px, calc(100% - 32px)); display: grid; gap: 2px; }

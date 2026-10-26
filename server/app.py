@@ -6,6 +6,7 @@ import itertools
 import json
 import math
 import os
+import re
 import secrets
 import threading
 import time
@@ -187,11 +188,15 @@ def museum():
 @app.post('/api/floors')
 @need('curator')
 def add_floor():
-    name = clean(request.get_json(silent=True) or {}, 'name', 60) or abort(400, 'Falta el nombre')
+    b = request.get_json(silent=True) or {}
+    name = clean(b, 'name', 60) or abort(400, 'Falta el nombre')
+    color = clean(b, 'color', 7).lower()  # its floor is this color and white; none: the client picks one
+    if color and not re.fullmatch(r'#[0-9a-f]{6}', color):
+        abort(400, 'El color debe ser como #b32626')
     count = db.floors.count_documents({})
     if count >= MAX_FLOORS:
         abort(400, f'El museo ya tiene el máximo de {MAX_FLOORS} pisos')
-    doc = {'name': name, 'order': count + 1, 'created': now()}
+    doc = {'name': name, 'order': count + 1, 'created': now(), **({'color': color} if color else {})}
     db.floors.insert_one(doc)
     changed()
     return jsonify(out(doc)), 201

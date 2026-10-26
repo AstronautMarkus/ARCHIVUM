@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 
 export type User = { id: string; email: string; name: string; curator: boolean; admin: boolean }
-export type Floor = { id: string; name: string }
+export type Floor = { id: string; name: string; color?: string } // its floor is `color` and white
+// what each new floor's floor looks like unless the curator picks a color: black, red, blue, green...
+export const FLOOR_COLORS = ['#1c1c1e', '#b32626', '#2350a8', '#2e7d3e', '#c99a1e', '#6d3aa8', '#1f8a8a', '#d0651c']
+export const floorColor = (f: Floor, k: number) => f.color ?? FLOOR_COLORS[k % FLOOR_COLORS.length]
 export type Room = { id: string; floor: string; title: string }
 export type Exhibit = {
   id: string; room: string; author: string; kind: 'photo' | 'video' | 'audio' | 'note'

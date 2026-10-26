@@ -58,15 +58,17 @@ export const whiteBrick = () => texture(64, 64, (g, rand) => {
   speckle(g, rand, 260, ['#dcd8d0', '#f8f7f3', '#d3cfc6'])
 })
 
-// polished grey concrete in 1 m slabs, for the galleries and corridors
-export const concrete = () => texture(64, 64, (g, rand) => {
-  g.fillStyle = '#bfc2c3'
-  g.fillRect(0, 0, 64, 64)
-  speckle(g, rand, 600, ['#b4b7b9', '#c8cacb', '#aeb1b3', '#cfd1d2'])
-  joints(g, '#a2a6a9', 32)
+// polished marble in 1 m squares, `color` and white like a chessboard: each floor of the museum has its own color
+export const checker = (color: string) => texture(64, 64, (g, rand) => {
+  for (const [x, y] of [[0, 0], [32, 0], [0, 32], [32, 32]]) {
+    g.fillStyle = (x + y) % 64 ? '#efede8' : color
+    g.fillRect(x, y, 32, 32)
+  }
+  speckle(g, rand, 500, ['rgba(255,255,255,0.12)', 'rgba(0,0,0,0.1)']) // veins that work on any color
+  joints(g, 'rgba(0,0,0,0.25)', 32)
 })
 
-// pale limestone slabs in two shades, for the lobby
+// pale limestone slabs in two shades, for the entrance
 export const limestone = () => texture(64, 64, (g, rand) => {
   for (const [x, y] of [[0, 0], [32, 0], [0, 32], [32, 32]]) {
     g.fillStyle = (x + y) % 64 ? '#d9d2c5' : '#cdc5b6'

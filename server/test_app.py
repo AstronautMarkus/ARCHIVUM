@@ -62,6 +62,14 @@ class Api(unittest.TestCase):
         self.assertEqual(self.upload(visitor, room, text='hola').status_code, 403)
         self.assertEqual(self.c.get('/api/museum').json['rooms'][0]['title'], 'Sala')
 
+    def test_floor_color(self):
+        curator, _ = self.account('ana', curator=True)
+        r = self.c.post('/api/floors', json={'name': 'Rojo', 'color': '#B32626'}, headers=curator)
+        self.assertEqual((r.status_code, r.json['color']), (201, '#b32626'))
+        self.assertNotIn('color', self.c.post('/api/floors', json={'name': 'Sin color'}, headers=curator).json)
+        for bad in ('red', '#b3262', 'url(x)', 12):
+            self.assertEqual(self.c.post('/api/floors', json={'name': 'x', 'color': bad}, headers=curator).status_code, 400)
+
     def test_floor_limit(self):
         curator, _ = self.account('cura', curator=True)
         server.db.floors.insert_many([{'name': f'{i}', 'order': i} for i in range(server.MAX_FLOORS - 1)])

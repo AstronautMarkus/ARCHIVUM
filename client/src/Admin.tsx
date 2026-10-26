@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, errorText, fileUrl, type Exhibit, type Floor, type Museum, type Room, type User } from './api'
+import { api, errorText, fileUrl, floorColor, FLOOR_COLORS, type Exhibit, type Floor, type Museum, type Room, type User } from './api'
 import { AuthForm } from './Auth'
 
 const ACCEPT = 'image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/wav,audio/mp4'
@@ -9,13 +9,15 @@ function Page({ children }: { children: ReactNode }) {
   return <main className="page"><h1>ARCHIVUM · Panel</h1><p><a href="#">← Volver al museo</a></p>{children}</main>
 }
 
-function Pick<T extends { id: string }>({ items, label, selected, onSelect, onDelete }: {
+function Pick<T extends { id: string }>({ items, label, selected, onSelect, onDelete, swatch }: {
   items: T[]; label: (i: T) => string; selected: string; onSelect: (id: string) => void; onDelete?: (i: T) => void
+  swatch?: (i: T, k: number) => string // a color square before each item
 }) {
   return (
     <ul>
-      {items.map((i) => (
+      {items.map((i, k) => (
         <li key={i.id}>
+          {swatch && <span className="swatch" style={{ background: swatch(i, k) }} />}
           <button className={i.id === selected ? 'sel' : ''} onClick={() => onSelect(i.id)}>{label(i)}</button>
           {onDelete && <button className="link" onClick={() => onDelete(i)}>borrar</button>}
         </li>
@@ -81,7 +83,7 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
   const exhibits = museum.exhibits.filter((e) => e.room === roomId)
 
   const addFloor = submit(async (d) => {
-    const f = await api<Floor>('/floors', { method: 'POST', json: { name: d.get('name') } })
+    const f = await api<Floor>('/floors', { method: 'POST', json: { name: d.get('name'), color: d.get('color') } })
     setFloorId(f.id)
     setRoomId('')
   })
@@ -116,9 +118,13 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
         <section>
           <h2>Pisos</h2>
           <Pick items={museum.floors} label={(f) => f.name} selected={floorId} onSelect={(id) => { setFloorId(id); setRoomId('') }}
+            swatch={floorColor}
             onDelete={user.admin ? (f) => confirmDelete(`el piso "${f.name}"`, `/floors/${f.id}`) : undefined} />
           <form className="row" onSubmit={addFloor}>
             <input name="name" placeholder="Nuevo piso" aria-label="Nombre del piso" required maxLength={60} />
+            {/* its floor will be this color and white; it suggests the next one in line */}
+            <input type="color" name="color" aria-label="Color del piso" key={museum.floors.length}
+              defaultValue={FLOOR_COLORS[museum.floors.length % FLOOR_COLORS.length]} />
             <button disabled={!!busy}>+</button>
           </form>
         </section>
