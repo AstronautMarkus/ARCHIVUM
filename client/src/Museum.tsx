@@ -25,6 +25,19 @@ function retro(t: THREE.Texture, repeat = false) {
   t.needsUpdate = true
 }
 
+// a pixelated copy of a texture repeating rx times across and ry times up (negative mirrors it)
+function useTiled(tex: THREE.Texture, rx = 1, ry = 1) {
+  return useMemo(() => {
+    const t = tex.clone()
+    retro(t, true)
+    t.repeat.set(rx, ry)
+    return t
+  }, [tex, rx, ry])
+}
+
+// titles: gold with a black outline so they read on any wall
+const TITLE = { color: GOLD, outlineWidth: '8%', outlineColor: '#000' }
+
 type Props = {
   museum: Museum; floor: number; token: string; quiet: boolean
   onFloor: (k: number) => void; onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
@@ -136,10 +149,11 @@ const OUTDOOR = 'ogp' // tiles under the open sky
 function World({ layouts, byRoom, quiet, current }: {
   layouts: Layout[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number
 }) {
-  const [wall, parquet, ceil, lite, facade, house, street, sidewalk, door, lobby, grass, wood, metal, ...water] = useTexture([
+  const [wall, parquet, ceil, lite, facade, house, street, sidewalk, door, lobby, grass, wood, metal, panel, plate, steel, ...water] = useTexture([
     '/doom/bigwall.png', '/doom/floor0_1.png', '/doom/ceil3_5.png', '/doom/tlite6_1.png',
     '/doom/stonew5.png', '/doom/pbrick8.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
     '/doom/flat18.png', '/doom/grass1.png', '/doom/wood.png', '/doom/door2_5.png',
+    '/doom/aqpanl08.png', '/doom/aqpanl05.png', '/doom/flat23.png',
     '/doom/fwater1.png', '/doom/fwater2.png', '/doom/fwater3.png', '/doom/fwater4.png',
   ])
   useMemo(() => water.forEach((t) => retro(t)), [water])
@@ -228,14 +242,12 @@ function World({ layouts, byRoom, quiet, current }: {
         : <Lintel key={`${tx},${tz},${y}`} tx={tx} tz={tz} y={y} tex={wall} top={WALL_H} />)}
       {ground.door && (
         <>
-          <Text position={[-0.05, (DOOR_H + STOREY) / 2, ground.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} color={GOLD}
-            outlineWidth={0.04} outlineColor="#3a2a14">ARCHIVUM</Text>
+          <Text position={[-0.05, (DOOR_H + STOREY) / 2, ground.door.z]} rotation-y={-Math.PI / 2} fontSize={0.9} {...TITLE}>ARCHIVUM</Text>
           <FrontDoor at={ground.door} tex={door} />
         </>
       )}
       {t.desk.length > 0 && (
-        <Text position={[TILE + 0.03, 2.2, t.deskZ]} rotation-y={Math.PI / 2} fontSize={0.6} color={GOLD}
-          outlineWidth={0.03} outlineColor="#3a2a14">RECEPCIÓN</Text>
+        <Text position={[TILE + 0.03, 2.2, t.deskZ]} rotation-y={Math.PI / 2} fontSize={0.6} {...TITLE}>RECEPCIÓN</Text>
       )}
       {ground.court && (
         <>
@@ -244,12 +256,12 @@ function World({ layouts, byRoom, quiet, current }: {
         </>
       )}
       <Props props={ground.props} />
-      <Elevator floors={layouts.length} near={near} stone={facade} metal={metal} lamp={lite} />
+      <Elevator floors={layouts.length} near={near} tex={{ stone: facade, metal, lamp: lite, panel, plate, steel }} />
       {layouts.map((layout, k) => near(k) && (
         <group key={k} position-y={k * STOREY}>
           {layout.rooms.map((r) => (
             <Text key={r.id} position={[r.sign.x, (DOOR_H + WALL_H) / 2, r.sign.z]} rotation-y={r.sign.rot}
-              fontSize={0.22} maxWidth={TILE * 1.8} textAlign="center" color={GOLD}>
+              fontSize={0.22} maxWidth={TILE * 1.8} textAlign="center" {...TITLE}>
               {r.title.toUpperCase()}
             </Text>
           ))}
@@ -276,12 +288,7 @@ function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
   cells: Cell[]; tex: THREE.Texture; height: number; base?: number; every?: number; size?: number
 }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
-  const map = useMemo(() => {
-    const t = tex.clone()
-    retro(t, true)
-    t.repeat.set(1, height / every)
-    return t
-  }, [tex, height, every])
+  const map = useTiled(tex, 1, height / every)
   useLayoutEffect(() => {
     const m = new THREE.Matrix4()
     cells.forEach(([tx, tz, y], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, y + base + height / 2, (tz + 0.5) * TILE)))
@@ -300,11 +307,7 @@ function WallSet({ cells, tex, height, base = 0, every = TILE, size = TILE }: {
 function TileSet({ cells, tex, y = 0 }: { cells: Cell[]; tex: THREE.Texture; y?: number }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
   const geometry = useMemo(() => new THREE.PlaneGeometry(TILE, TILE).rotateX(y > 1 ? Math.PI / 2 : -Math.PI / 2), [y])
-  const map = useMemo(() => {
-    const t = tex.clone()
-    retro(t, true)
-    return t
-  }, [tex])
+  const map = useTiled(tex)
   useLayoutEffect(() => {
     const m = new THREE.Matrix4()
     cells.forEach(([tx, tz, fy], i) => ref.current.setMatrixAt(i, m.makeTranslation((tx + 0.5) * TILE, fy + y, (tz + 0.5) * TILE)))
@@ -325,79 +328,91 @@ function TileSet({ cells, tex, y = 0 }: { cells: Cell[]; tex: THREE.Texture; y?:
 const car = { at: 0, target: 0, doors: 0, v: 0, still: 1 }
 const GLASS = { color: HAZE, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }
 
-function Elevator({ floors, near, stone, metal, lamp }: {
-  floors: number; near: (k: number) => boolean; stone: THREE.Texture; metal: THREE.Texture; lamp: THREE.Texture
-}) {
-  const { x0, z, door } = LIFT, cx = x0 + TILE / 2, H = floors * STOREY
-  const leafW = door / 2, panelW = (TILE - door) / 2 // two leaves fill the opening; fixed panels flank it
-  const cab = useRef<THREE.Group>(null!), left = useRef<THREE.Mesh>(null!), right = useRef<THREE.Mesh>(null!)
-  const [docked, setDocked] = useState(0) // where the car stands still; its own doors replace that landing's
+type LiftTextures = Record<'stone' | 'metal' | 'lamp' | 'panel' | 'plate' | 'steel', THREE.Texture>
+
+function Elevator({ floors, near, tex }: { floors: number; near: (k: number) => boolean; tex: LiftTextures }) {
+  const { x0, z, w, door } = LIFT, cx = x0 + TILE / 2, H = floors * STOREY
+  const leafW = door / 2, panelW = (w - door) / 2 // two leaves fill the opening; the panels beside it hide them open
+  const cab = useRef<THREE.Group>(null!)
+  const leaves = [useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!)]
+  // the floor the car stands at (-1 between floors): that landing's doors open and shut together with the car's;
+  // every other landing shows its doors shut
+  const [docked, setDocked] = useState(0)
   useFrame(() => {
     cab.current.position.y = car.at * STOREY
-    left.current.position.z = z - leafW / 2 - car.doors * leafW * 0.95 // the leaves slide behind the panels
-    right.current.position.z = z + leafW / 2 + car.doors * leafW * 0.95
-    const d = car.at === car.target ? car.at : -1
+    leaves.forEach((leaf, i) => { // car left, car right, landing left, landing right; they slide behind the panels
+      leaf.current.position.z = z + (i % 2 ? 1 : -1) * (leafW / 2 + car.doors * leafW * 0.95)
+    })
+    const d = Number.isInteger(car.at) ? car.at : -1
     if (d !== docked) setDocked(d)
   })
-  // corner posts up the whole shaft; on every floor a lintel and two panels around the doors, and closed landing
-  // doors wherever the car isn't
+  // corner posts up the whole shaft and a machine room on top; on every floor a lintel and two panels around the
+  // doors, and closed landing doors wherever the car isn't
   const frame = useMemo(() => [
-    ...[[x0, z - 1], [x0, z + 1], [x0 + TILE, z - 1], [x0 + TILE, z + 1]].map(([x, zz]): Box => [x, H / 2, zz, 0.15, H, 0.15]),
-    [cx, H + 0.6, z, TILE + 0.3, 1.2, TILE + 0.3] as Box, // the machine room capping the shaft
+    ...[[x0, -1], [x0, 1], [x0 + TILE, -1], [x0 + TILE, 1]].map(([x, s]): Box => [x, H / 2, z + (s * w) / 2, 0.15, H, 0.15]),
+    [cx, H + 0.6, z, TILE + 0.3, 1.2, w + 0.3] as Box,
     ...Array.from({ length: floors }, (_, k): Box[] => [
-      [x0, k * STOREY + (DOOR_H + STOREY) / 2, z, 0.2, STOREY - DOOR_H, TILE],
-      ...[-1, 1].map((s): Box => [x0, k * STOREY + DOOR_H / 2, z + s * (door + panelW) / 2, 0.2, DOOR_H, panelW]),
+      [x0, k * STOREY + (DOOR_H + STOREY) / 2, z, 0.2, STOREY - DOOR_H, w],
+      ...[-1, 1].map((s): Box => [x0, k * STOREY + DOOR_H / 2, z + (s * (door + panelW)) / 2, 0.2, DOOR_H, panelW]),
     ]).flat(),
-  ], [floors, H, x0, cx, z, door, panelW])
+  ], [floors, H, x0, cx, z, w, door, panelW])
   const landings = useMemo(() => {
-    const leaf = (k: number, s: number): Box => [x0 - 0.13, k * STOREY + DOOR_H / 2, z + (s * leafW) / 2, 0.06, DOOR_H, leafW]
+    const leaf = (k: number, s: number): Box => [x0 + 0.02, k * STOREY + DOOR_H / 2, z + (s * leafW) / 2, 0.06, DOOR_H, leafW]
     const shut = Array.from({ length: floors }, (_, k) => k).filter((k) => k !== docked)
     return { left: shut.map((k) => leaf(k, -1)), right: shut.map((k) => leaf(k, 1)) }
   }, [floors, docked, x0, z, leafW])
   // the right leaf shows the door picture flipped, so the pair meets in the middle like real elevator doors
-  const [leaf, flipped] = useMemo(() => [1, -1].map((dir) => {
-    const t = metal.clone()
-    retro(t, true)
-    t.repeat.x = dir
-    return t
-  }), [metal])
+  const leaf = useTiled(tex.metal), flipped = useTiled(tex.metal, -1)
+  const wallTex = useTiled(tex.panel, 2), frontTex = useTiled(tex.plate), floorTex = useTiled(tex.steel, 1, 2)
+  const lampTex = useTiled(tex.lamp, 1, 2)
+  const leafMesh = (i: number, x: number) => (
+    <mesh ref={leaves[i]} position={[x, DOOR_H / 2, z + ((i % 2 ? 1 : -1) * leafW) / 2]}>
+      <boxGeometry args={[0.06, DOOR_H, leafW]} />
+      <meshBasicMaterial map={i % 2 ? flipped : leaf} />
+    </mesh>
+  )
   return (
     <>
-      <Boxes boxes={frame} tex={stone} />
-      <Boxes boxes={landings.left} tex={metal} />
-      <Boxes boxes={landings.right} tex={metal} repeat={[-1, 1]} />
-      {[[cx, z - TILE / 2, 0], [cx, z + TILE / 2, 0], [x0 + TILE, z, Math.PI / 2]].map(([x, zz, r], i) => (
+      <Boxes boxes={frame} tex={tex.stone} />
+      <Boxes boxes={landings.left} tex={tex.metal} />
+      <Boxes boxes={landings.right} tex={tex.metal} repeat={[-1, 1]} />
+      {[[cx, z - w / 2, 0, TILE], [cx, z + w / 2, 0, TILE], [x0 + TILE, z, Math.PI / 2, w]].map(([x, zz, r, width], i) => (
         <mesh key={i} position={[x, H / 2, zz]} rotation-y={r}>
-          <planeGeometry args={[TILE, H]} />
+          <planeGeometry args={[width, H]} />
           <meshBasicMaterial {...GLASS} />
         </mesh>
       ))}
-      {/* the car: closed all round but for its doors and the glass back that looks onto the courtyard */}
+      {/* the car: steel walls, a lit ceiling, a glass back onto the courtyard, and its doors */}
       <group ref={cab}>
-        <mesh position={[cx, 0.05, z]}><boxGeometry args={[TILE - 0.1, 0.1, TILE - 0.1]} /><meshBasicMaterial color="#4a4f57" /></mesh>
-        <mesh position={[cx, 3.05, z]}><boxGeometry args={[TILE - 0.1, 0.1, TILE - 0.1]} /><meshBasicMaterial map={lamp} /></mesh>
+        <mesh position={[cx, 0.05, z]}><boxGeometry args={[TILE - 0.1, 0.1, w - 0.1]} /><meshBasicMaterial map={floorTex} /></mesh>
+        <mesh position={[cx, 3.05, z]}><boxGeometry args={[TILE - 0.1, 0.1, w - 0.1]} /><meshBasicMaterial map={lampTex} /></mesh>
         {[-1, 1].map((s) => (
-          <mesh key={s} position={[cx, 1.55, z + s * (TILE / 2 - 0.08)]}>
+          <mesh key={s} position={[cx, 1.55, z + s * (w / 2 - 0.05)]}>
             <boxGeometry args={[TILE - 0.1, 3, 0.06]} />
-            <meshBasicMaterial color="#6f7782" />
+            <meshBasicMaterial map={wallTex} />
           </mesh>
         ))}
         <mesh position={[x0 + 0.18, (DOOR_H + 3.05) / 2, z]}>
-          <boxGeometry args={[0.04, 3.05 - DOOR_H, TILE - 0.1]} />
-          <meshBasicMaterial color="#6f7782" />
+          <boxGeometry args={[0.04, 3.05 - DOOR_H, w - 0.1]} />
+          <meshBasicMaterial map={frontTex} />
         </mesh>
         {[-1, 1].map((s) => (
-          <mesh key={s} position={[x0 + 0.18, DOOR_H / 2, z + s * (door + panelW) / 2]}>
-            <boxGeometry args={[0.04, DOOR_H, panelW]} />
-            <meshBasicMaterial color="#6f7782" />
+          <mesh key={s} position={[x0 + 0.18, DOOR_H / 2, z + (s * (door + panelW)) / 2]}>
+            <boxGeometry args={[0.04, DOOR_H, panelW - 0.05]} />
+            <meshBasicMaterial map={frontTex} />
           </mesh>
         ))}
-        <mesh position={[x0 + TILE - 0.08, 1.55, z]}><boxGeometry args={[0.04, 3, TILE - 0.1]} /><meshBasicMaterial {...GLASS} /></mesh>
-        <mesh ref={left} position={[x0 + 0.13, DOOR_H / 2, z - leafW / 2]}><boxGeometry args={[0.06, DOOR_H, leafW]} /><meshBasicMaterial map={leaf} /></mesh>
-        <mesh ref={right} position={[x0 + 0.13, DOOR_H / 2, z + leafW / 2]}><boxGeometry args={[0.06, DOOR_H, leafW]} /><meshBasicMaterial map={flipped} /></mesh>
+        <mesh position={[x0 + TILE - 0.08, 1.55, z]}><boxGeometry args={[0.04, 3, w - 0.1]} /><meshBasicMaterial {...GLASS} /></mesh>
+        {leafMesh(0, x0 + 0.13)}
+        {leafMesh(1, x0 + 0.13)}
+      </group>
+      {/* the landing doors where the car stands, inside the stone frame, moving with the car's */}
+      <group position-y={docked * STOREY} visible={docked >= 0}>
+        {leafMesh(2, x0 + 0.02)}
+        {leafMesh(3, x0 + 0.02)}
       </group>
       {Array.from({ length: floors }, (_, k) => near(k) && (
-        <Text key={k} position={[x0 - 0.12, k * STOREY + 2.85, z]} rotation-y={-Math.PI / 2} fontSize={0.3} color={GOLD}>
+        <Text key={k} position={[x0 - 0.12, k * STOREY + 2.85, z]} rotation-y={-Math.PI / 2} fontSize={0.3} {...TITLE}>
           ASCENSOR
         </Text>
       ))}
@@ -408,12 +423,7 @@ function Elevator({ floors, near, stone, metal, lamp }: {
 // instanced boxes placed and sized one by one: railings, stairs, the facade skin
 function Boxes({ boxes, tex, repeat = [1, 1] }: { boxes: Box[]; tex: THREE.Texture; repeat?: [number, number] }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
-  const map = useMemo(() => {
-    const t = tex.clone()
-    retro(t, true)
-    t.repeat.set(repeat[0], repeat[1])
-    return t
-  }, [tex, repeat[0], repeat[1]])
+  const map = useTiled(tex, repeat[0], repeat[1])
   useLayoutEffect(() => {
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), at = new THREE.Vector3(), size = new THREE.Vector3()
     boxes.forEach(([x, y, z, sx, sy, sz], i) => ref.current.setMatrixAt(i, m.compose(at.set(x, y, z), q, size.set(sx, sy, sz))))
@@ -429,12 +439,7 @@ function Boxes({ boxes, tex, repeat = [1, 1] }: { boxes: Box[]; tex: THREE.Textu
 }
 
 function Lintel({ tx, tz, y, tex, top }: { tx: number; tz: number; y: number; tex: THREE.Texture; top: number }) {
-  const map = useMemo(() => {
-    const t = tex.clone()
-    retro(t, true)
-    t.repeat.set(1, (top - DOOR_H) / TILE)
-    return t
-  }, [tex, top])
+  const map = useTiled(tex, 1, (top - DOOR_H) / TILE)
   return (
     <mesh position={[(tx + 0.5) * TILE, y + (DOOR_H + top) / 2, (tz + 0.5) * TILE]}>
       <boxGeometry args={[TILE, top - DOOR_H, TILE]} />
@@ -451,12 +456,7 @@ function FrontDoor({ at, tex }: { at: NonNullable<Layout['door']>; tex: THREE.Te
   const ref = useRef<THREE.Mesh>(null!)
   const near = useRef(false)
   const sound = useMemo(() => ({ open: new Audio('/doom/dsdoropn.wav'), close: new Audio('/doom/dsdorcls.wav') }), [])
-  const map = useMemo(() => {
-    const t = tex.clone()
-    retro(t, true)
-    t.repeat.set(at.w / TILE, 1) // one door leaf per tile
-    return t
-  }, [tex, at.w])
+  const map = useTiled(tex, at.w / TILE, 1) // one door leaf per tile
   useFrame(({ camera }, dt) => {
     const now = Math.hypot(camera.position.x - at.x, camera.position.z - at.z) < 4
     if (now !== near.current) {
@@ -576,7 +576,7 @@ function ExhibitView({ ex, slot, quiet }: { ex: Exhibit; slot: Slot; quiet: bool
   return (
     <group position={[slot.x, 0, slot.z]} rotation-y={slot.rot} userData={{ ex }}>
       {ex.kind === 'photo' ? <Photo ex={ex} /> : ex.kind === 'note' ? <Note text={ex.text} /> : <Media ex={ex} quiet={quiet} />}
-      {ex.caption && <Text position={[0, 0.8, 0.01]} fontSize={0.14} maxWidth={MAX_W} textAlign="center" color="#ddd">{ex.caption}</Text>}
+      {ex.caption && <Text position={[0, 0.8, 0.01]} fontSize={0.14} maxWidth={MAX_W} textAlign="center" {...TITLE} color="#eee">{ex.caption}</Text>}
     </group>
   )
 }

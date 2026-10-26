@@ -43,9 +43,10 @@ test('the ground floor: street, front door, lobby, courtyard and rooms all conne
 test('the elevator shaft is in the same place on every floor, its doors facing the lobby', () => {
   const floors = buildBuilding([rooms([2]), rooms([1, 1, 1]), rooms([])])
   for (const l of floors) {
-    assert.equal(tileAt(l, LIFT.x0 + 1, LIFT.z), 'E')
+    for (const dz of [-1, 1]) assert.equal(tileAt(l, LIFT.x0 + 1, LIFT.z + dz), 'E')
     assert.equal(tileAt(l, LIFT.x0 - 1, LIFT.z), 'L')
-    assert.ok(atLiftDoor(LIFT.x0 - 1, LIFT.z) && !atLiftDoor(LIFT.x0 - 1, LIFT.z + TILE))
+    assert.ok(atLiftDoor(LIFT.x0 - 1, LIFT.z) && !atLiftDoor(LIFT.x0 - 1, LIFT.z + LIFT.w / 2 + 0.5))
+    for (const z of [13.8, 14.2]) assert.notEqual(tileAt(l, LIFT.x0 + 1, z), 'E', 'the entrance axis (z = 14) stays clear')
     assert.ok(reachableAll(l))
   }
   assert.equal(new Set(floors.map((l) => l.rows[0].length + l.x0)).size, 1, 'every floor is as long as the longest')

@@ -13,9 +13,10 @@ export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE } // a safe spot in the lobb
 export const SOLID = '#FRv' // wall, fountain, reception desk, courtyard void; columns and the elevator are special
 export const MAX_FLOORS = 99
 export const COLUMN = 0.35 // half the width of a column
-// the elevator shaft's tile, and the lobby tile in front of its doors (on the west side)
-// beside the entrance axis (rows 6-7), so walking in from the street you see straight into the courtyard
-export const LIFT = { tx: 6, tz: 5, x0: 6 * TILE, z: 5.5 * TILE, door: 1.2 } // door: width of its opening
+// the elevator shaft: two tiles wide on the courtyard's west edge, beside the entrance axis (rows 6-7) so walking
+// in from the street you see straight into the courtyard; its doors face the lobby. z: center, w: width along z,
+// door: width of the opening, which leaves room on both sides for the open doors to slide away
+export const LIFT = { tx: 6, tz0: 4, tz1: 5, x0: 6 * TILE, z: 5 * TILE, w: 2 * TILE, door: 1.6 }
 const ROOM_W = 5
 // rows of the ring: corridor 0-1, arcade 2, courtyard 3-10, arcade 11, corridor 12-13
 const RING_END = 13, COURT_Z0 = 3, COURT_Z1 = 10, LOBBY_X1 = 5, COURT_X0 = 7
@@ -91,7 +92,7 @@ export function buildFloor(rooms: RoomIn[], { ground = false, courtX1 = courtEnd
       else if (!ground) set(tx, tz, 'B')
     }
   }
-  set(LIFT.tx, LIFT.tz, 'E')
+  fill(LIFT.tx, LIFT.tx, LIFT.tz0, LIFT.tz1, 'E')
   if (ground) {
     fill(2, 2, 2, 4, 'R') // reception desk, on your left as you come in
     fill(0, 0, 6, 7, 'D') // double front door
@@ -147,6 +148,6 @@ export function solidAt(l: Layout | undefined, x: number, z: number) {
   return Math.abs(x - cx) < COLUMN && Math.abs(z - cz) < COLUMN
 }
 
-// is (x, z) the lobby tile in front of the elevator doors?
+// is (x, z) in the lobby right in front of the elevator?
 export const atLiftDoor = (x: number, z: number) =>
-  Math.floor(x / TILE) === LIFT.tx - 1 && Math.floor(z / TILE) === LIFT.tz
+  Math.floor(x / TILE) === LIFT.tx - 1 && Math.floor(z / TILE) >= LIFT.tz0 && Math.floor(z / TILE) <= LIFT.tz1
