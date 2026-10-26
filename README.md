@@ -8,7 +8,7 @@ server/   Flask + MongoDB. Cuentas, permisos, subidas, miniaturas y un WebSocket
           que reparte las posiciones de los visitantes y avisa cuando el museo cambia
 ```
 
-Arte: texturas y sprites de [Freedoom](https://freedoom.github.io) (licencia BSD, ver `client/public/doom/LICENSE-freedoom.txt`).
+Arte: el museo (ladrillo blanco, concreto, cantera, fierro) se pinta en código en `client/src/textures.ts`; la ciudad, la calle, el santuario y los sprites son de [Freedoom](https://freedoom.github.io) (licencia BSD, ver `client/public/doom/LICENSE-freedoom.txt`).
 
 ## Correr en local
 

@@ -119,22 +119,23 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     fill(mx, mx + 1, COURT_Z0, COURT_Z1, 'p')
     fill(mx, mx + 1, mz, mz + 1, 'F')
   } else fill(COURT_X0, courtX1, COURT_Z0, COURT_Z1, 'v')
-  // around the courtyard a column on the corners and every fourth tile, enough to hold the floors up; in between,
-  // open arcade on the ground floor and balconies upstairs
+  // around the courtyard a column on the corners and every other tile, carrying the arches of an arcade: open on the
+  // ground floor, balconies upstairs
+  // (the elevator shaft takes its place in the ring first)
+  fill(LIFT.tx, LIFT.tx, LIFT.tz0, LIFT.tz1, 'E')
   const ax = LOBBY_X1 + 1, bx = courtX1 + 1, az = COURT_Z0 - 1, bz = COURT_Z1 + 1
   for (let tx = ax; tx <= bx; tx++) {
     for (let tz = az; tz <= bz; tz++) {
       const edgeX = tx === ax || tx === bx, edgeZ = tz === az || tz === bz
-      if (!edgeX && !edgeZ) continue
+      if ((!edgeX && !edgeZ) || grid[tz - z0][tx - x0] === 'E') continue
       const along = edgeX ? tz - az : tx - ax, length = edgeX ? bz - az : bx - ax
-      if ((edgeX && edgeZ) || (along % 4 === 0 && along < length - 1)) { // never two side by side
+      if ((edgeX && edgeZ) || (along % 2 === 0 && along < length - 1)) { // never two side by side
         set(tx, tz, 'C')
         post((tx + 0.5) * TILE, (tz + 0.5) * TILE, COLUMN)
       }
       else if (!ground) set(tx, tz, 'B')
     }
   }
-  fill(LIFT.tx, LIFT.tx, LIFT.tz0, LIFT.tz1, 'E')
   // how far (tx, tz) is out from the building's outer walls along x and along z, in tiles; 0 or less is inside
   const away = (tx: number, tz: number) => [Math.max(box.x0 - tx, tx - box.x1), Math.max(box.z0 - tz, tz - box.z1)]
   // is (tx, tz) out in front of the door, give or take `spare` rows?
