@@ -312,6 +312,13 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
           }
         }
       }))
+      // the glass shaft stands out into the courtyard and the slab's edge runs on around it, a tile's beam at a time,
+      // just outside its glass so the car clears it
+      const lo = y + WALL_H - BEAM, hi = roof ? top : y + WALL_H, mid = (lo + hi) / 2
+      ;(roof ? t.parapet : t.beams).push(...[-1, 1].flatMap((s): Box[] => [
+        [LIFT.x0 + (TILE + 0.24) / 2, mid, LIFT.z + s * (LIFT.w / 2 + 0.12), TILE + 0.24, hi - lo, 0.24],
+        [LIFT.x0 + TILE + 0.12, mid, LIFT.z + (s * TILE) / 2, 0.24, hi - lo, TILE],
+      ]))
     })
     // the outside of the museum: a thin skin just outside its outer walls, a box per tile and storey with a window
     // painted on every other tile, and a parapet on top, so inside you see your floor's own walls. Real windows leave
