@@ -18,7 +18,8 @@ function beep(freq: number, duration = 0.08, volume = 0.06) {
   } catch { /* no audio */ }
 }
 
-// the door's keypad. The PIN is checked by the server; `onOpen` runs once it says it's right
+// the door's keypad. The PIN is checked by the server; `onOpen` runs once it says it's right. Esc is left to whoever
+// shows it, which closes it when the key is let go of
 export function Keypad({ room, title, onOpen, onClose }: { room: string; title: string; onOpen: () => void; onClose: () => void }) {
   const [code, setCode] = useState('')
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
@@ -52,7 +53,6 @@ export function Keypad({ room, title, onOpen, onClose }: { room: string; title: 
       if (/^\d$/.test(e.key)) press(e.key)
       else if (e.key === 'Enter') submit(code)
       else if (e.key === 'Backspace') erase(false)
-      else if (e.key === 'Escape') onClose()
       else return
       e.preventDefault()
       e.stopPropagation()

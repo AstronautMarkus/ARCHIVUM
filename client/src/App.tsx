@@ -40,6 +40,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [typing, setTyping] = useState<Act | null>(null) // the keypad of a PIN room
   const [login, setLogin] = useState(false)
   const [talking, setTalking] = useState(false)
+  const [resuming, setResuming] = useState(false)
   const [chat, setChat] = useState<(Chat & { key: number })[]>([])
   const [saved, setView] = useSaved('view', 'media'), [fps, setFps] = useSaved('fps', 'no')
   const view: View = saved in VIEWS ? (saved as View) : 'media'
@@ -49,11 +50,19 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const floors = museum.floors
   const current = Math.min(floorIdx, floors.length - 1)
   const floor = floors[current]
+  // closing the viewer or the keypad takes you straight back in: the page let go of the mouse itself, so the browser
+  // lets it take it back without a click, and the pause screen only shows if it won't
+  const resume = () => {
+    setViewing(null)
+    setTyping(null)
+    setResuming(true)
+    Promise.resolve(document.querySelector('canvas')?.requestPointerLock()).catch(() => {}).finally(() => setResuming(false))
+  }
+  const paused = !locked && !viewing && !login && !typing && !resuming
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
-      if (e.code === 'Escape') setViewing(null)
       if (e.code === 'KeyE' && picked) { setViewing(picked); document.exitPointerLock() }
       if (e.code === 'KeyE' && act?.kind === 'pin') { setTyping(act); document.exitPointerLock() }
       if (e.code === 'KeyE' && act?.kind === 'exit') openRoomDoor(act.room)
@@ -64,9 +73,13 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       if (e.code === 'PageUp') go(current + 1)
       if (e.code === 'PageDown') go(current - 1)
     }
+    // Esc closes the viewer or the keypad when it's let go of: the browser takes the release of an Esc as you leaving
+    // the mouse it would just have been given back on the press
+    const onUp = (e: KeyboardEvent) => { if (e.code === 'Escape' && (viewing || typing)) resume() }
     addEventListener('keydown', onKey)
-    return () => removeEventListener('keydown', onKey)
-  }, [picked, act, elevator, floors.length, current, user])
+    addEventListener('keyup', onUp)
+    return () => { removeEventListener('keydown', onKey); removeEventListener('keyup', onUp) }
+  }, [picked, act, viewing, typing, elevator, floors.length, current, user])
 
   if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
   return (
@@ -101,7 +114,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           {act && <div>{act.kind === 'pin' ? `[E] teclear el PIN · ${act.title}` : '[E] SALIDA · abrir la puerta'}</div>}
           {elevator && <div>ASCENSOR · piso {current + 1} de {floors.length} · [PgUp] subir · [PgDn] bajar · [1-9] ir directo</div>}
           {/* in the HUD, not inside #lock: a click there would grab the mouse */}
-          {!locked && !viewing && !login && !typing && (
+          {paused && (
             <div className="settings">
               Distancia:
               {Object.keys(VIEWS).map((v) => <button key={v} className={v === view ? 'sel' : ''} onClick={() => setView(v)}>{v}</button>)}
@@ -110,7 +123,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           )}
         </div>
       </div>
-      {!locked && !viewing && !login && !typing && (
+      {paused && (
         <div id="lock" className="overlay">
           <div>
             <h1>ARCHIVUM</h1>
@@ -119,11 +132,11 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           </div>
         </div>
       )}
-      {viewing && <Viewer ex={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <Viewer ex={viewing} onClose={resume} />}
       {typing && (
-        <div className="overlay modal" onClick={() => setTyping(null)}>
+        <div className="overlay modal" onClick={resume}>
           <div onClick={(e) => e.stopPropagation()}>
-            <Keypad room={typing.room} title={typing.title} onOpen={() => { openRoomDoor(typing.room); reload() }} onClose={() => setTyping(null)} />
+            <Keypad room={typing.room} title={typing.title} onOpen={() => { openRoomDoor(typing.room); reload() }} onClose={resume} />
           </div>
         </div>
       )}
