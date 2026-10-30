@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fileUrl, getToken, logout, useMuseum, useUser, type Exhibit, type Museum, type User } from './api'
-import { MuseumView, VIEWS, type Chat, type View } from './Museum'
+import { MuseumView, openRoomDoor, VIEWS, type Act, type Chat, type View } from './Museum'
+import { Keypad } from './Keypad'
 import { Admin } from './Admin'
 import { AuthForm } from './Auth'
 
@@ -35,6 +36,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [elevator, setElevator] = useState(false)
   const [picked, setPicked] = useState<Exhibit | null>(null)
   const [viewing, setViewing] = useState<Exhibit | null>(null)
+  const [act, setAct] = useState<Act | null>(null)
+  const [typing, setTyping] = useState<Act | null>(null) // the keypad of a PIN room
   const [login, setLogin] = useState(false)
   const [talking, setTalking] = useState(false)
   const [chat, setChat] = useState<(Chat & { key: number })[]>([])
@@ -52,6 +55,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.code === 'Escape') setViewing(null)
       if (e.code === 'KeyE' && picked) { setViewing(picked); document.exitPointerLock() }
+      if (e.code === 'KeyE' && act?.kind === 'pin') { setTyping(act); document.exitPointerLock() }
+      if (e.code === 'KeyE' && act?.kind === 'exit') openRoomDoor(act.room)
       if (e.code === 'KeyT' && user) { e.preventDefault(); setTalking(true) } // T talks, like in DOOM
       if (!elevator) return
       const n = Number(e.key), go = (k: number) => setFloorIdx(Math.max(0, Math.min(floors.length - 1, k)))
@@ -61,13 +66,13 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
     }
     addEventListener('keydown', onKey)
     return () => removeEventListener('keydown', onKey)
-  }, [picked, elevator, floors.length, current, user])
+  }, [picked, act, elevator, floors.length, current, user])
 
   if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
   return (
     <>
       <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} onFloor={setFloorIdx}
-        onElevator={setElevator} onPick={setPicked} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
+        onElevator={setElevator} onPick={setPicked} onAct={setAct} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
           <span>ARCHIVUM · {floor.name} ({current + 1}/{floors.length})</span>
@@ -93,9 +98,10 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
           {picked && <div>[E] ver · {picked.caption || KIND[picked.kind]}</div>}
+          {act && <div>{act.kind === 'pin' ? `[E] teclear el PIN · ${act.title}` : '[E] SALIDA · abrir la puerta'}</div>}
           {elevator && <div>ASCENSOR · piso {current + 1} de {floors.length} · [PgUp] subir · [PgDn] bajar · [1-9] ir directo</div>}
           {/* in the HUD, not inside #lock: a click there would grab the mouse */}
-          {!locked && !viewing && !login && (
+          {!locked && !viewing && !login && !typing && (
             <div className="settings">
               Distancia:
               {Object.keys(VIEWS).map((v) => <button key={v} className={v === view ? 'sel' : ''} onClick={() => setView(v)}>{v}</button>)}
@@ -104,7 +110,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           )}
         </div>
       </div>
-      {!locked && !viewing && !login && (
+      {!locked && !viewing && !login && !typing && (
         <div id="lock" className="overlay">
           <div>
             <h1>ARCHIVUM</h1>
@@ -114,6 +120,13 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
         </div>
       )}
       {viewing && <Viewer ex={viewing} onClose={() => setViewing(null)} />}
+      {typing && (
+        <div className="overlay modal" onClick={() => setTyping(null)}>
+          <div onClick={(e) => e.stopPropagation()}>
+            <Keypad room={typing.room} title={typing.title} onOpen={() => { openRoomDoor(typing.room); reload() }} onClose={() => setTyping(null)} />
+          </div>
+        </div>
+      )}
       {login && <div className="overlay modal"><AuthForm onDone={() => setLogin(false)} /></div>}
     </>
   )

@@ -7,7 +7,7 @@ import {
   atLiftDoor, buildBuilding, noise, solidAt, tileAt, CORE_ART, CORE_X0, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
-import { fileUrl, floorColor, type Exhibit, type Floor, type Museum } from './api'
+import { fileUrl, floorColor, isUnlocked, lockRoom, type Exhibit, type Floor, type Museum } from './api'
 import { cantera, ceiling, checker, hedge, limestone, pennant, railing, spots, whiteBrick } from './textures'
 import core from './core.json'
 
@@ -65,14 +65,15 @@ type Props = {
   museum: Museum; floor: number; token: string; quiet: boolean; view: View; fps: RefObject<HTMLElement | null>
   onFloor: (k: number) => void; onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
   onLock: (locked: boolean) => void; onChanged: () => void; onChat: (m: Chat) => void; say: RefObject<(text: string) => void>
+  onAct: (a: Act | null) => void
 }
 export type Chat = { id: number; n: string; chat: string }
 
 // the whole building in one scene; `floor` is where you stand, kept in sync both ways with stairs and elevator
-export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, onElevator, onPick, onLock, onChanged, onChat, say }: Props) {
+export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, onElevator, onPick, onAct, onLock, onChanged, onChat, say }: Props) {
   const byRoom = Map.groupBy(museum.exhibits, (e) => e.room)
   const floors = museum.floors.map((f: Floor) => museum.rooms.filter((r) => r.floor === f.id)
-    .map((r) => ({ id: r.id, title: r.title, count: byRoom.get(r.id)?.length ?? 0 })))
+    .map((r) => ({ id: r.id, title: r.title, locked: r.locked, count: r.count ?? byRoom.get(r.id)?.length ?? 0 })))
   const key = JSON.stringify(floors)
   const layouts = useMemo(() => buildBuilding(floors), [key])
   // experiment: a painted panorama for the sky; useMemo(makeSky, []) brings back the pixel-art one
@@ -85,10 +86,10 @@ export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, on
       <primitive key={view} attach="background" object={VIEWS[view].thick ? fog.color : sky} />
       <primitive attach="fog" object={fog} />
       <Suspense fallback={null}>
-        <World layouts={layouts} colors={museum.floors.map(floorColor)} byRoom={byRoom} quiet={quiet} current={floor} view={view} />
+        <World layouts={layouts} colors={museum.floors.map(floorColor)} byRoom={byRoom} quiet={quiet} current={floor} view={view} onChanged={onChanged} />
         <Avatars floorId={museum.floors[floor]?.id ?? ''} token={token} onChanged={onChanged} onChat={onChat} say={say} />
       </Suspense>
-      <Player layouts={layouts} floor={floor} view={view} onFloor={onFloor} onElevator={onElevator} onPick={onPick} />
+      <Player layouts={layouts} floor={floor} view={view} onFloor={onFloor} onElevator={onElevator} onPick={onPick} onAct={onAct} />
       <Fps el={fps} />
       <PointerLockControls selector="#lock" onLock={() => onLock(true)} onUnlock={() => onLock(false)} />
     </Canvas>
@@ -204,8 +205,8 @@ const OUTDOOR = 'osgpT' // tiles under the open sky
 
 // The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
 // same draw calls. Exhibits, signs and media, the heavy part, exist only for your floor and the ones next to it.
-function World({ layouts, colors, byRoom, quiet, current, view }: {
-  layouts: Layout[]; colors: string[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number; view: View
+function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
+  layouts: Layout[]; colors: string[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number; view: View; onChanged: () => void
 }) {
   // the museum is a white gallery with a stone arcade (see textures.ts); Freedoom's art is for the city, the street,
   // the shrine and the elevator
@@ -424,6 +425,9 @@ function World({ layouts, colors, byRoom, quiet, current, view }: {
         </group>
       ))}
       <group name="exhibits">
+        {layouts.map((layout, k) => near(k) && layout.rooms.filter((r) => r.locked).map((r) => (
+          <PinRoom key={r.id} room={r} y={k * STOREY} tex={metal} onRelock={() => { lockRoom(r.id); onChanged() }} />
+        )))}
         {near(0) && CORE_ART.map((slot, i) => CORE_EXHIBITS[i] && (
           <Suspense key={i} fallback={null}>
             <ExhibitView ex={CORE_EXHIBITS[i]} slot={slot} quiet={quiet} />
@@ -826,6 +830,76 @@ function FrontDoor({ at, tex }: { at: NonNullable<Layout['door']>; tex: THREE.Te
   )
 }
 
+// ---- PIN rooms ----
+
+// what you point at that you can press: a PIN room's keypad outside, or the exit button inside
+export type Act = { kind: 'pin' | 'exit'; room: string; title: string }
+// each PIN room's door: 0 shut .. 1 open; `want` it open for another `t` seconds. It opens when the PIN is right (or
+// from the exit button inside), stays while you're in the doorway, and shuts a moment after you've gone through
+const roomDoors = new Map<string, { open: number; want: boolean; t: number }>()
+const roomDoor = (id: string) => roomDoors.get(id) ?? roomDoors.set(id, { open: 0, want: false, t: 0 }).get(id)!
+export const openRoomDoor = (id: string) => Object.assign(roomDoor(id), { want: true, t: 8 })
+const blockedByRoomDoor = (l: Layout, x: number, z: number) =>
+  l.rooms.some((r) => r.locked && Math.floor(x / TILE) === r.door.tx && Math.floor(z / TILE) === r.door.tz && roomDoor(r.id).open < 0.8)
+
+function PinRoom({ room, y, tex, onRelock }: { room: Layout['rooms'][number]; y: number; tex: THREE.Texture; onRelock: () => void }) {
+  const { dir, door: { tx, tz } } = room
+  const ref = useRef<THREE.Mesh>(null!)
+  const map = useTiled(tex)
+  const sound = useMemo(() => ({ open: new Audio('/doom/dsdoropn.wav'), close: new Audio('/doom/dsdorcls.wav') }), [])
+  const cx = (tx + 0.5) * TILE, cz = (tz + 0.5) * TILE, bx = (tx + 1.5) * TILE
+  useFrame(({ camera: { position: p } }, dt) => {
+    dt = Math.min(dt, 0.1)
+    const d = roomDoor(room.id), sameFloor = Math.abs(p.y - (y + EYE)) < 1.5
+    const along = ((p.z - cz) * dir) / TILE // negative in the corridor, positive inside the room
+    const inDoorway = sameFloor && Math.abs(along) < 1 && Math.abs(p.x - cx) < TILE / 2
+    if (d.want) {
+      d.t = inDoorway ? 1.5 : d.t - dt
+      if (d.t <= 0) d.want = false
+    }
+    const before = d.open, wanted = d.want || (inDoorway && d.open > 0)
+    d.open = THREE.MathUtils.clamp(d.open + (wanted ? 2 : -2) * dt, 0, 1)
+    const start = wanted ? before === 0 && d.open > 0 : before === 1 && d.open < 1 // it just began to open or to shut
+    if (start) {
+      const s = wanted ? sound.open : sound.close
+      s.currentTime = 0
+      s.volume = Math.max(0, 1 - Math.hypot(p.x - cx, p.z - cz) / 20) * 0.6
+      s.play().catch(() => {}) // blocked until the first click
+    }
+    ref.current.position.y = DOOR_H / 2 + d.open * (DOOR_H + 0.02)
+    // shut behind whoever opened it and the room is locked again, once they're out in the corridor
+    if (!d.want && d.open === 0 && isUnlocked(room.id) && (along < 0 || !sameFloor)) onRelock()
+  })
+  const face = (side: number) => (tz + 0.5 + (side * dir) / 2) * TILE + side * dir * 0.06 // a wall tile's face: -1 corridor, 1 room
+  return (
+    <group position-y={y}>
+      <mesh ref={ref} position={[cx, DOOR_H / 2, cz]}>
+        <boxGeometry args={[TILE, DOOR_H, 0.25]} />
+        <meshBasicMaterial map={map} />
+      </mesh>
+      <Terminal x={bx} z={face(-1)} rot={dir < 0 ? 0 : Math.PI} act={{ kind: 'pin', room: room.id, title: room.title }} label="PIN" />
+      <Terminal x={bx} z={face(1)} rot={dir < 0 ? Math.PI : 0} act={{ kind: 'exit', room: room.id, title: room.title }} label="SALIDA" />
+    </group>
+  )
+}
+
+// a small panel on a wall that Player's crosshair finds by its `act`
+function Terminal({ x, z, rot, act, label }: { x: number; z: number; rot: number; act: Act; label: string }) {
+  return (
+    <group position={[x, 1.3, z]} rotation-y={rot} userData={{ act }}>
+      <mesh>
+        <boxGeometry args={[0.6, 0.5, 0.12]} />
+        <meshBasicMaterial color="#1c211c" />
+      </mesh>
+      <mesh position-z={0.065}>
+        <planeGeometry args={[0.5, 0.4]} />
+        <meshBasicMaterial color="#8cff6b" />
+      </mesh>
+      <Text position-z={0.07} fontSize={0.12} color="#0a2a0a">{label}</Text>
+    </group>
+  )
+}
+
 // stone basin with animated Doom water and a spout in the middle, where the courtyard paths cross
 function Fountain({ at, stone, water }: { at: { x: number; z: number }; stone: THREE.Texture; water: THREE.Texture[] }) {
   const surface = useRef<THREE.MeshBasicMaterial>(null!)
@@ -1104,14 +1178,14 @@ const UP = new THREE.Vector3(0, 1, 0)
 const CENTER = new THREE.Vector2(0, 0)
 const R = 0.2 // body radius: small, so you can walk right up to walls and what hangs on them
 
-function Player({ layouts, floor, view, onFloor, onElevator, onPick }: {
+function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
   layouts: Layout[]; floor: number; view: View; onFloor: (k: number) => void
-  onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
+  onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void; onAct: (a: Act | null) => void
 }) {
   const { camera, scene } = useThree()
   const haze = useMemo(() => new THREE.Color(VIEWS[view].haze), [view])
   const keys = useRef<Record<string, boolean>>({})
-  const last = useRef<{ elevator?: boolean; pick?: Exhibit | null }>({})
+  const last = useRef<{ elevator?: boolean; pick?: Exhibit | null; act?: Act | null }>({})
   const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, 4), [])
   const dir = useMemo(() => new THREE.Vector3(), [])
 
@@ -1209,6 +1283,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick }: {
       }
       if (inside) return true
       if (l.door && Math.abs(x - l.door.x) < TILE / 2 && tileAt(l, x, z) === 'D' && frontDoor.open < 0.8) return false
+      if (blockedByRoomDoor(l, x, z)) return false
       return !solidAt(l, x, z)
     }
     const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => open(x + a, z + b))
@@ -1248,11 +1323,14 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick }: {
     // what the crosshair points at; walls block it
     ray.setFromCamera(CENTER, camera)
     const targets = ['exhibits', 'walls'].map((n) => scene.getObjectByName(n)).filter((o) => !!o)
-    let ex: Exhibit | null = null
+    let ex: Exhibit | null = null, act: Act | null = null
     for (let o: THREE.Object3D | null = ray.intersectObjects(targets, true)[0]?.object ?? null; o; o = o.parent) {
       if (o.userData.ex) { ex = o.userData.ex; break }
+      if (o.userData.act) { act = o.userData.act; break }
     }
+    if (act?.kind === 'pin' && isUnlocked(act.room)) act = null // already open: nothing to type
     if (ex !== last.current.pick) onPick((last.current.pick = ex))
+    if (act?.kind !== last.current.act?.kind || act?.room !== last.current.act?.room) onAct((last.current.act = act))
   })
   return null
 }

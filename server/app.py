@@ -77,6 +77,12 @@ def out(doc):
     return d
 
 
+def room_out(room, count):
+    """A room as the client sees it: the PIN's hash never leaves, a locked room only says how many exhibits it holds."""
+    d = out({k: v for k, v in room.items() if k != 'pin'})
+    return {**d, 'locked': True, 'count': count} if room.get('pin') else d
+
+
 def oid(value):
     try:
         return ObjectId(value)
@@ -178,11 +184,17 @@ def make_admin(email):
 
 @app.get('/api/museum')
 def museum():
-    # shortcut: sends the whole museum at once; page it per floor past a few thousand exhibits
+    # shortcut: sends the whole museum at once; page it per floor past a few thousand exhibits.
+    # The exhibits of a PIN room come only with the token its unlock gave, in X-Room-Tokens
     by_order = [('order', 1), ('created', 1)]
+    counts = {d['_id']: d['n'] for d in db.exhibits.aggregate([{'$group': {'_id': '$room', 'n': {'$sum': 1}}}])}
+    rooms = list(db.rooms.find().sort(by_order))
+    user = user_from_token(request.headers.get('Authorization', '').removeprefix('Bearer '))
+    staff = user and (user.get('curator') or user.get('admin'))  # curators manage every room, PIN or not
+    open_rooms = {r['_id'] for r in rooms if staff or not r.get('pin')} | held_rooms(request.headers.get('X-Room-Tokens', ''))
     return jsonify(floors=[out(d) for d in db.floors.find().sort(by_order)],
-                   rooms=[out(d) for d in db.rooms.find().sort(by_order)],
-                   exhibits=[out(d) for d in db.exhibits.find().sort('created', 1)])
+                   rooms=[room_out(r, counts.get(r['_id'], 0)) for r in rooms],
+                   exhibits=[out(d) for d in db.exhibits.find({'room': {'$in': list(open_rooms)}}).sort('created', 1)])
 
 
 @app.post('/api/floors')
@@ -210,9 +222,63 @@ def add_room():
     title = clean(b, 'title', 60) or abort(400, 'Falta el nombre')
     doc = {'floor': floor['_id'], 'title': title, 'order': db.rooms.count_documents({'floor': floor['_id']}) + 1,
            'created': now()}
+    if pin := clean(b, 'pin', 20):
+        doc['pin'] = hash_pin(pin)
     db.rooms.insert_one(doc)
     changed()
-    return jsonify(out(doc)), 201
+    return jsonify(room_out(doc, 0)), 201
+
+
+def hash_pin(pin):
+    if not re.fullmatch(r'\d{4}', pin):
+        abort(400, 'El PIN debe tener 4 dígitos')
+    return generate_password_hash(pin)
+
+
+@app.put('/api/rooms/<id>/pin')
+@need('curator')
+def set_pin(id):
+    """Sets the room's PIN, or removes it when `pin` is empty."""
+    b = request.get_json(silent=True) or {}
+    pin = clean(b, 'pin', 20)
+    update = {'$set': {'pin': hash_pin(pin)}} if pin else {'$unset': {'pin': ''}}
+    if not db.rooms.update_one({'_id': oid(id)}, update).matched_count:
+        abort(404, 'Esa sala no existe')
+    changed()
+    return '', 204
+
+
+# a wrong PIN costs a try; after PIN_TRIES in PIN_WINDOW seconds that visitor waits for the window to pass
+PIN_TRIES, PIN_WINDOW, ROOM_TOKEN_AGE = 5, 60, 3600
+failures = {}  # (ip, room) -> times of the recent wrong PINs
+room_tokens = URLSafeTimedSerializer(secret_key(), salt='room')
+
+
+def held_rooms(header):
+    """Rooms whose unlock tokens are in `header` (comma separated) and still valid."""
+    held = set()
+    for t in header.split(',')[:50]:
+        try:
+            held.add(ObjectId(room_tokens.loads(t.strip(), max_age=ROOM_TOKEN_AGE)))
+        except (BadSignature, InvalidId):
+            pass
+    return held
+
+
+@app.post('/api/rooms/<id>/unlock')
+def unlock_room(id):
+    room = db.rooms.find_one({'_id': oid(id)}) or abort(404, 'Esa sala no existe')
+    if not room.get('pin'):
+        abort(400, 'Esa sala no tiene PIN')
+    key, t = (request.remote_addr, room['_id']), time.monotonic()
+    recent = [f for f in failures.pop(key, []) if t - f < PIN_WINDOW]
+    if len(recent) >= PIN_TRIES:
+        failures[key] = recent
+        abort(429, 'Demasiados intentos, espera un momento')
+    if not check_password_hash(room['pin'], clean(request.get_json(silent=True) or {}, 'pin', 20)):
+        failures[key] = [*recent, t]
+        abort(403, 'PIN incorrecto')
+    return jsonify(token=room_tokens.dumps(str(room['_id'])))
 
 
 def make_thumb(path):

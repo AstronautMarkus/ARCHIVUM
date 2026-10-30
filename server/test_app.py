@@ -119,6 +119,45 @@ class Api(unittest.TestCase):
         self.assertEqual((m['floors'], m['rooms'], m['exhibits']), ([], [], []))
         self.assertFalse((server.UPLOADS / kept['thumb']).exists())
 
+    def test_pin_rooms(self):
+        curator, _ = self.account('cura', curator=True)
+        floor = self.c.post('/api/floors', json={'name': 'Piso 1'}, headers=curator).json
+        for bad in ('12', 'abcd', '12345'):
+            self.assertEqual(self.c.post('/api/rooms', json={'floor': floor['id'], 'title': 'x', 'pin': bad}, headers=curator).status_code, 400)
+        room = self.c.post('/api/rooms', json={'floor': floor['id'], 'title': 'Secreta', 'pin': '6767'}, headers=curator).json
+        self.assertNotIn('pin', room)
+        self.assertTrue(server.db.rooms.find_one()['pin'].startswith(('scrypt', 'pbkdf2')))
+        self.upload(curator, room, text='secreto')
+
+        # visitors see the room is locked, how full it is, and none of its exhibits
+        m = self.c.get('/api/museum').json
+        self.assertEqual((m['rooms'][0]['locked'], m['rooms'][0]['count'], m['exhibits']), (True, 1, []))
+        self.assertNotIn('pin', m['rooms'][0])
+        self.assertEqual(len(self.c.get('/api/museum', headers=curator).json['exhibits']), 1)
+
+        url = f"/api/rooms/{room['id']}/unlock"
+        self.assertEqual(self.c.post(url, json={'pin': '0000'}).status_code, 403)
+        token = self.c.post(url, json={'pin': '6767'}).json['token']
+        self.assertEqual(len(self.c.get('/api/museum', headers={'X-Room-Tokens': f'junk,{token}'}).json['exhibits']), 1)
+        self.assertEqual(self.c.get('/api/museum', headers={'X-Room-Tokens': token + 'x'}).json['exhibits'], [])
+
+        # the PIN can be changed, and removed to open the room to everyone
+        self.assertEqual(self.c.put(f"/api/rooms/{room['id']}/pin", json={'pin': '1111'}, headers=curator).status_code, 204)
+        self.assertEqual(self.c.post(url, json={'pin': '6767'}).status_code, 403)
+        self.assertEqual(self.c.put(f"/api/rooms/{room['id']}/pin", json={'pin': ''}, headers=curator).status_code, 204)
+        m = self.c.get('/api/museum').json
+        self.assertEqual((m['rooms'][0].get('locked'), len(m['exhibits'])), (None, 1))
+
+    def test_pin_attempts_are_limited(self):
+        curator, _ = self.account('cura', curator=True)
+        floor = self.c.post('/api/floors', json={'name': 'Piso 1'}, headers=curator).json
+        room = self.c.post('/api/rooms', json={'floor': floor['id'], 'title': 'S', 'pin': '6767'}, headers=curator).json
+        server.failures.clear()
+        url = f"/api/rooms/{room['id']}/unlock"
+        codes = [self.c.post(url, json={'pin': '0000'}).status_code for _ in range(server.PIN_TRIES + 1)]
+        self.assertEqual(codes, [403] * server.PIN_TRIES + [429])
+        self.assertEqual(self.c.post(url, json={'pin': '6767'}).status_code, 429)  # even the right one, until it passes
+
     def test_admin_manages_curators(self):
         cura, _ = self.account('cura', curator=True)
         admin, _ = self.account('admin', admin=True)

@@ -88,9 +88,10 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
     setRoomId('')
   })
   const addRoom = submit(async (d) => {
-    const r = await api<Room>('/rooms', { method: 'POST', json: { floor: floorId, title: d.get('title') } })
+    const r = await api<Room>('/rooms', { method: 'POST', json: { floor: floorId, title: d.get('title'), pin: d.get('pin') } })
     setRoomId(r.id)
   })
+  const setPin = submit((d) => api(`/rooms/${roomId}/pin`, { method: 'PUT', json: { pin: d.get('pin') } }))
   const upload = submit(async (d) => {
     const files = d.getAll('files').filter((f): f is File => f instanceof File && f.size > 0)
     const caption = String(d.get('caption')), text = String(d.get('text')).trim()
@@ -131,10 +132,11 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
         {floor && (
           <section>
             <h2>Salas · {floor.name}</h2>
-            <Pick items={rooms} label={(r) => r.title} selected={roomId} onSelect={setRoomId}
+            <Pick items={rooms} label={(r) => r.title + (r.locked ? ' 🔒' : '')} selected={roomId} onSelect={setRoomId}
               onDelete={user.admin ? (r) => confirmDelete(`la sala "${r.title}"`, `/rooms/${r.id}`) : undefined} />
             <form className="row" onSubmit={addRoom}>
               <input name="title" placeholder="Nueva sala" aria-label="Nombre de la sala" required maxLength={60} />
+              <input name="pin" placeholder="PIN" aria-label="PIN de la sala (opcional)" inputMode="numeric" pattern="\d{4}" maxLength={4} size={5} />
               <button disabled={!!busy}>+</button>
             </form>
           </section>
@@ -142,6 +144,11 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
         {room && (
           <section>
             <h2>{room.title}</h2>
+            <form className="row" onSubmit={setPin}>
+              <input name="pin" placeholder={room.locked ? 'Nuevo PIN' : 'PIN (4 dígitos)'} aria-label="PIN de la sala" inputMode="numeric" pattern="\d{4}" maxLength={4} size={9} />
+              <button disabled={!!busy}>{room.locked ? 'Cambiar PIN' : 'Poner PIN'}</button>
+              {room.locked && <button type="button" className="link" disabled={!!busy} onClick={() => run('Guardando…', () => api(`/rooms/${roomId}/pin`, { method: 'PUT', json: { pin: '' } }))}>quitar</button>}
+            </form>
             <ul>
               {exhibits.map((ex) => (
                 <li key={ex.id}>

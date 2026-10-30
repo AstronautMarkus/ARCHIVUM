@@ -5,7 +5,7 @@ export type Floor = { id: string; name: string; color?: string } // its floor is
 // what each new floor's floor looks like unless the curator picks a color: black, red, blue, green...
 export const FLOOR_COLORS = ['#1c1c1e', '#b32626', '#2350a8', '#2e7d3e', '#c99a1e', '#6d3aa8', '#1f8a8a', '#d0651c']
 export const floorColor = (f: Floor, k: number) => f.color ?? FLOOR_COLORS[k % FLOOR_COLORS.length]
-export type Room = { id: string; floor: string; title: string }
+export type Room = { id: string; floor: string; title: string; locked?: boolean; count?: number } // locked: has a PIN
 export type Exhibit = {
   id: string; room: string; author: string; kind: 'photo' | 'video' | 'audio' | 'note'
   file: string; thumb: string; caption: string; text: string
@@ -24,9 +24,19 @@ export function setSession(token: string, user: User | null) {
 export const logout = () => setSession('', null)
 export const getToken = () => session.token
 
+// unlock tokens of the PIN rooms you're in, kept only in memory: reloading the page locks them again
+const roomTokens = new Map<string, string>()
+export const isUnlocked = (room: string) => roomTokens.has(room)
+export async function unlockRoom(room: string, pin: string) {
+  const { token } = await api<{ token: string }>(`/rooms/${room}/unlock`, { method: 'POST', json: { pin } })
+  roomTokens.set(room, token)
+}
+export const lockRoom = (room: string) => roomTokens.delete(room)
+
 export async function api<T = unknown>(path: string, { json, ...init }: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = session.token ? { Authorization: `Bearer ${session.token}` } : {}
   if (json !== undefined) headers['Content-Type'] = 'application/json'
+  if (roomTokens.size) headers['X-Room-Tokens'] = [...roomTokens.values()].join(',')
   const res = await fetch(`/api${path}`, { ...init, headers, body: json !== undefined ? JSON.stringify(json) : init.body })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw Object.assign(new Error(data.error ?? `Error ${res.status}`), { status: res.status })

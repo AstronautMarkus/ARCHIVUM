@@ -176,3 +176,13 @@ test('real windows at both ends of every floor, every other tile, only where the
   }
   assert.ok([1, 3].every((tz) => tileAt(g, 0.5 * TILE, (tz + 0.5) * TILE) === 'W'), 'downstairs, onto the garden by the core')
 })
+
+test('a PIN room has its door in the doorway, with wall beside it for the keypad and the exit button', () => {
+  const l = buildFloor(rooms([3, 3]).map((r, i) => ({ ...r, locked: i === 0 })))
+  assert.deepEqual(l.rooms.map((r) => r.locked), [true, false])
+  for (const r of l.rooms) {
+    const { tx, tz } = r.door
+    assert.equal(tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), 'D')
+    assert.ok(solidAt(l, (tx + 1.5) * TILE, (tz + 0.5) * TILE))
+  }
+})

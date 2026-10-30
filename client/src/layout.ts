@@ -67,7 +67,7 @@ const HEDGE = BLOCK.lastIndexOf('g') + 1 // the garden's outer edge, where its h
 // how far the forest and the shrine reach west of the city, and the shrine and the houses north of it, in tiles
 const WILD = 20
 
-export type RoomIn = { id: string; title: string; count: number }
+export type RoomIn = { id: string; title: string; count: number; locked?: boolean }
 export type Slot = { x: number; z: number; rot: number } // a point on a wall surface, rot faces into the room
 // something you walk right up to and around: it stops you only within r of (x, z), a square like a column's
 export type Post = { x: number; z: number; r: number }
@@ -83,7 +83,9 @@ export type Layout = {
   footprint: { x0: number; x1: number; z0: number; z1: number } // the building's outer walls, in tiles (inclusive)
   start: { x: number; z: number } // where a visitor appears when they arrive at the museum
   props: Prop[]
-  rooms: { id: string; title: string; sign: Slot; slots: Slot[] }[]
+  // a locked room has a PIN door in its doorway (tile `door`, which the room is `dir` away from: -1 north, 1 south),
+  // a keypad beside it in the corridor and an exit button beside it inside
+  rooms: { id: string; title: string; sign: Slot; slots: Slot[]; locked: boolean; dir: number; door: { tx: number; tz: number } }[]
   door?: { x: number; z: number; w: number } // the front door (ground floor), world units
   // the entrance tower around the door: its front x, center z, width and the porch's depth, its two columns and the
   // flagpoles out in the garden; world units
@@ -225,7 +227,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
 
     // sign on the corridor side of the door lintel
     const sign = { x: (doorX + 0.5) * TILE, z: (doorZ + 0.5 - dir / 2) * TILE - dir * 0.03, rot: dir < 0 ? 0 : Math.PI }
-    return { id: r.id, title: r.title, sign, slots: slots.slice(0, r.count) }
+    return { id: r.id, title: r.title, sign, slots: slots.slice(0, r.count), locked: !!r.locked, dir, door: { tx: doorX, tz: doorZ } }
   })
 
   if (!ground) return { rows: grid.map((r) => r.join('')), x0, z0, footprint: box, start: SPAWN, props: [], rooms: out, posts }

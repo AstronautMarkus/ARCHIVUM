@@ -48,3 +48,47 @@ label { display: grid; gap: 2px; }
 .chat b { color: var(--accent); }
 .hud input { pointer-events: auto; background: #000a; }
 @keyframes fade { 0%, 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* PIN keypad (a room's door), from keypass_doom.html */
+.kp{--green:#8cff6b;--red:#ff4545;--white:#d9e2d5;color:var(--white);font-family:"Courier New",monospace;width:320px;max-width:calc(100vw - 32px)}
+.kp *{box-sizing:border-box}
+.kp .terminal{position:relative;width:100%;max-width:320px;padding:13px 17px 17px;background:linear-gradient(100deg,#101210,#252925 18%,#171a17 48%,#292d29 82%,#101210);border:3px solid #050605;outline:2px solid #424840;box-shadow:0 0 0 5px #111411,0 22px 55px #000, inset 2px 0 #4b514b,inset -2px 0 #080908;clip-path:polygon(0 0,100% 0,100% 100%,0 100%)}
+.kp .terminal:before{content:"";position:absolute;left:7px;right:7px;top:6px;height:4px;background:#777e75;box-shadow:0 2px 0 #050605}
+.kp .lightbar{height:5px;width:76%;margin:5px auto 13px;background:#9dffa0;box-shadow:0 0 7px #6bff6f,0 0 14px #2d8c32}
+.kp .screen-frame{padding:7px;background:#090b09;border:3px solid #080908;box-shadow:inset 0 0 0 2px #343b33;margin-bottom:15px}
+.kp .screen{height:143px;position:relative;overflow:hidden;padding:10px;background:#111b12;border:2px solid #43513e;color:var(--green);box-shadow:inset 0 0 22px #173e18,0 0 9px #4b8d2b26}
+.kp .screen:after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,#0000 0 3px,#0006 4px 5px);opacity:.55}
+.kp .screen-top,.kp .screen-content,.kp .screen-bottom{position:relative;z-index:1}
+.kp .screen-top{display:flex;justify-content:space-between;gap:8px;font-size:9px;letter-spacing:1px;color:#9bd18b}
+.kp .led{display:inline-block;width:6px;height:6px;background:var(--green);box-shadow:0 0 7px var(--green);margin-right:4px}
+.kp .screen-content{height:83px;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center}
+.kp .big-label{font-size:12px;letter-spacing:2px;margin-bottom:9px;color:#9acb8b}
+.kp .digits{font-size:28px;letter-spacing:8px;padding-left:8px;min-height:34px;text-shadow:0 0 8px #73ff56}
+.kp .status{overflow-wrap:anywhere;line-height:1.3;font-size:10px;letter-spacing:1px;text-align:center;color:var(--green)}
+.kp .screen-bottom{display:flex;justify-content:space-between;font-size:8px;color:#65945e;letter-spacing:1px;margin-top:4px}
+.kp .keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;padding:0 8px}
+.kp button{font-family:inherit;cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+.kp .key{height:43px;border:1px solid #070807;border-top-color:#51584f;background:linear-gradient(135deg,#303630,#1b1f1b);color:#e4e9e0;box-shadow:0 4px 0 #080908, inset 0 1px #454b43;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:1px;text-shadow:1px 1px #000;transition:transform .06s,background .06s}
+.kp .key .num{font-size:19px;font-weight:bold;line-height:1}
+.kp .key .sub{font-size:7px;color:#899386;letter-spacing:1px}
+.kp .key:active,.kp .key.pressed{transform:translateY(3px);box-shadow:0 1px 0 #080908;background:#3f493c}
+.kp .key.utility{color:#b9c5b4}.kp .key.utility .num{font-size:14px}
+.kp .key:focus-visible,.kp .action:focus-visible{outline:2px solid var(--green);outline-offset:3px}
+.kp .actions{display:grid;grid-template-columns:1fr 1.15fr 1fr;gap:7px;margin:13px 8px 0}
+.kp .action{min-height:33px;border:1px solid #090a09;font-size:9px;letter-spacing:1px;font-weight:bold;color:#e5e9e2;background:#2c322b;box-shadow:0 3px 0 #070807,inset 0 1px #51594f}
+.kp .action.confirm{background:#244b24;color:#a6ff91;border-color:#101e0f}.kp .action:active{transform:translateY(2px);box-shadow:0 1px #050605}
+.kp .sensor{margin:18px auto 0;width:82px;height:65px;position:relative;display:grid;place-items:center;border:2px solid #090a09;background:#111411;box-shadow:inset 0 0 0 3px #2c322b,0 2px #444a42}
+.kp .sensor:before,.kp .sensor:after{content:"";position:absolute;top:9px;bottom:9px;width:8px;border-top:2px solid #4d5749;border-bottom:2px solid #4d5749}
+.kp .sensor:before{left:-24px;border-left:2px solid #4d5749}.kp .sensor:after{right:-24px;border-right:2px solid #4d5749}
+.kp .fingerprint{width:33px;height:36px;display:grid;place-items:center;background:linear-gradient(135deg,#30372f,#151815);border:2px solid #050605;box-shadow:inset 0 0 0 2px #40483d;color:#7d9c73;font-size:20px}
+.kp .brand{font-size:10px;font-weight:bold;letter-spacing:3px;color:#7f8a7c;text-align:center;margin-top:9px;font-style:italic}
+.kp .terminal.success .screen{border-color:#78ff62;box-shadow:inset 0 0 25px #1c6c1a,0 0 18px #51ff4c55}
+.kp .terminal.success .lightbar{background:#aaff93;box-shadow:0 0 16px #61ff49}
+.kp .terminal.failure .screen{border-color:#ff4545;box-shadow:inset 0 0 25px #6c1010,0 0 18px #ff222255}
+.kp .terminal.failure .lightbar{background:#ff4545;box-shadow:0 0 16px #ff2222}
+.kp .terminal.failure .digits{color:#ff7777;text-shadow:0 0 8px #ff2222}
+.kp .terminal.success .status{color:#a6ff91}.kp .terminal.failure .status{color:#ff7474}
+.kp .terminal.unlocked{animation:unlock .35s steps(2,end) 3}
+.kp .system-title{font-size:11px;letter-spacing:3px;color:#76916f;text-align:center;margin-bottom:12px}
+.kp .kp-close{margin-top:12px;width:100%}
+@keyframes unlock{50%{transform:translateX(2px)}}
