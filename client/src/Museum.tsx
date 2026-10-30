@@ -1286,11 +1286,23 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
       if (blockedByRoomDoor(l, x, z)) return false
       return !solidAt(l, x, z)
     }
-    const free = (x: number, z: number) => [[-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => open(x + a, z + b))
+    const free = (x: number, z: number) =>
+      [[0, 0], [-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => open(x + a, z + b))
     const nx = p.x + (dir.x * fwd - dir.z * side) * step
     const nz = p.z + (dir.z * fwd + dir.x * side) * step
-    if (free(nx, p.z)) p.x = nx
-    if (free(p.x, nz)) p.z = nz
+    const walk = (axis: 'x' | 'z', delta: number) => {
+      const count = Math.max(1, Math.ceil(Math.abs(delta) / (R / 2)))
+      const increment = delta / count
+      for (let i = 0; i < count; i++) {
+        const x = axis === 'x' ? p.x + increment : p.x
+        const z = axis === 'z' ? p.z + increment : p.z
+        if (!free(x, z)) break
+        if (axis === 'x') p.x = x
+        else p.z = z
+      }
+    }
+    walk('x', nx - p.x)
+    walk('z', nz - p.z)
 
     // riding, you go wherever the car goes and the floor counts up as you pass them
     if (riding) {
