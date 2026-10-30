@@ -115,7 +115,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           <div>
             <h1>ARCHIVUM</h1>
             <p>Click para entrar</p>
-            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · E: ver de cerca · T: chatear · Esc: salir</p>
+            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · Espacio: saltar · E: ver de cerca · T: chatear · Esc: salir</p>
           </div>
         </div>
       )}

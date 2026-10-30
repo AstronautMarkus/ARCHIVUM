@@ -69,7 +69,7 @@ El token va en `Authorization: Bearer <token>` y dura 30 días.
 
 ## Controles
 
-WASD o flechas para moverse, mouse para mirar, Shift para correr, E para ver de cerca lo que apuntas, Esc para salir. En el ascensor (al inicio del pasillo), las teclas 1-9 cambian de piso.
+WASD o flechas para moverse, mouse para mirar, Shift para correr, Espacio para saltar, E para ver de cerca lo que apuntas, Esc para salir. En el ascensor (al inicio del pasillo), las teclas 1-9 cambian de piso.
 
 En la pausa (Esc) eliges la distancia de dibujado (lejos, media o niebla) y prendes el contador de FPS; este navegador lo recuerda.
 

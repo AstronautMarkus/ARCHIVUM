@@ -1177,6 +1177,7 @@ function Media({ ex, quiet }: { ex: Exhibit; quiet: boolean }) {
 const UP = new THREE.Vector3(0, 1, 0)
 const CENTER = new THREE.Vector2(0, 0)
 const R = 0.2 // body radius: small, so you can walk right up to walls and what hangs on them
+const HEAD = 0.15 // how far the top of your head is above your eyes
 
 function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
   layouts: Layout[]; floor: number; view: View; onFloor: (k: number) => void
@@ -1185,6 +1186,8 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
   const { camera, scene } = useThree()
   const haze = useMemo(() => new THREE.Color(VIEWS[view].haze), [view])
   const keys = useRef<Record<string, boolean>>({})
+  const jumpQueued = useRef(false)
+  const verticalSpeed = useRef(0)
   const last = useRef<{ elevator?: boolean; pick?: Exhibit | null; act?: Act | null }>({})
   const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, 4), [])
   const dir = useMemo(() => new THREE.Vector3(), [])
@@ -1213,6 +1216,8 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     fl.current = k
     camera.position.set(s.x, k * WALL_H + EYE, s.z)
     camera.rotation.set(0, -Math.PI / 2, 0)
+    verticalSpeed.current = 0
+    jumpQueued.current = false
   }
   useEffect(() => {
     if (!arrived.current) spawn(floor)
@@ -1225,10 +1230,15 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) keys.current[e.code] = true
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.code === 'Space') {
+        e.preventDefault()
+        if (!e.repeat) jumpQueued.current = true
+      }
+      keys.current[e.code] = true
     }
     const up = (e: KeyboardEvent) => { keys.current[e.code] = false }
-    const blur = () => { keys.current = {} }
+    const blur = () => { keys.current = {}; jumpQueued.current = false }
     addEventListener('keydown', down); addEventListener('keyup', up); addEventListener('blur', blur)
     return () => { removeEventListener('keydown', down); removeEventListener('keyup', up); removeEventListener('blur', blur) }
   }, [])
@@ -1246,6 +1256,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     const fwd = (k.KeyW || k.ArrowUp ? 1 : 0) - (k.KeyS || k.ArrowDown ? 1 : 0)
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0)
     const step = (k.ShiftLeft || k.ShiftRight ? 8 : 4) * dt
+    const magnitude = Math.hypot(fwd, side) || 1
     const here = fl.current, l = layouts[here], riding = inCar()
     car.target = Math.min(car.target, layouts.length - 1)
     // the car, like a real one: standing at its door calls it to your floor. To go anywhere it shuts its doors,
@@ -1286,10 +1297,20 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
       if (blockedByRoomDoor(l, x, z)) return false
       return !solidAt(l, x, z)
     }
+    // what your head hits: lintels as high as a doorway's over doors, window bays and the car's doorway, the storey's
+    // ceiling elsewhere indoors, nothing under the sky. The highest your eyes can go at (x, z), over your whole body.
+    // shortcut: ignores the arcade's arches, whose undersides drop to SPRING by the columns; model them if jumps get higher
+    const ceiling = (x: number, z: number) => {
+      const c = tileAt(l, x, z)
+      return 'DWE'.includes(c) ? DOOR_H : OUTDOOR.includes(c) ? Infinity : WALL_H
+    }
+    const feet = [[0, 0], [-R, -R], [R, -R], [-R, R], [R, R]]
+    const headroom = (x: number, z: number) => here * WALL_H + Math.min(...feet.map(([a, b]) => ceiling(x + a, z + b))) - HEAD
+    // mid-jump, a lintel stops you just like a wall does
     const free = (x: number, z: number) =>
-      [[0, 0], [-R, -R], [R, -R], [-R, R], [R, R]].every(([a, b]) => open(x + a, z + b))
-    const nx = p.x + (dir.x * fwd - dir.z * side) * step
-    const nz = p.z + (dir.z * fwd + dir.x * side) * step
+      feet.every(([a, b]) => open(x + a, z + b)) && (riding || p.y <= headroom(x, z))
+    const nx = p.x + (dir.x * fwd - dir.z * side) / magnitude * step
+    const nz = p.z + (dir.z * fwd + dir.x * side) / magnitude * step
     const walk = (axis: 'x' | 'z', delta: number) => {
       const count = Math.max(1, Math.ceil(Math.abs(delta) / (R / 2)))
       const increment = delta / count
@@ -1309,9 +1330,24 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
       const passing = Math.round(car.at)
       if (passing !== here) onFloor((fl.current = passing))
       p.y = car.at * WALL_H + EYE
+      verticalSpeed.current = 0
+      jumpQueued.current = false
     } else {
       if (solidAt(l, p.x, p.z)) return spawn(here) // the map changed under us
-      p.y += (here * WALL_H + EYE - p.y) * Math.min(1, dt * 12)
+      const ground = here * WALL_H + EYE
+      if (jumpQueued.current && p.y <= ground + 0.001 && verticalSpeed.current === 0) verticalSpeed.current = 5.5
+      jumpQueued.current = false
+      verticalSpeed.current -= 16 * dt
+      p.y += verticalSpeed.current * dt
+      const top = headroom(p.x, p.z)
+      if (p.y > top) { // bumped your head: stop rising and fall from there
+        p.y = top
+        verticalSpeed.current = Math.min(0, verticalSpeed.current)
+      }
+      if (p.y <= ground) {
+        p.y = ground
+        verticalSpeed.current = 0
+      }
     }
     const f = fl.current
     const at = (x: number, z: number) => tileAt(layouts[f], x, z)
