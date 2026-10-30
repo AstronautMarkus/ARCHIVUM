@@ -4,7 +4,7 @@ import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
-  atLiftDoor, buildBuilding, noise, solidAt, tileAt, CORE_ART, CORE_X0, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H,
+  atLiftDoor, buildBuilding, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, floorColor, isUnlocked, lockRoom, type Exhibit, type Floor, type Museum } from './api'
@@ -245,7 +245,7 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
       const at = (tx: number, tz: number) => tileAt(layout, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
       layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
         const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz, y], x = (tx + 0.5) * TILE, z = (tz + 0.5) * TILE
-        const core = k === 0 && tx >= CORE_X0 && tx < 0
+        const core = k === 0 && tx >= CORE_X0 && tx < 0 && tz >= CORE_Z0 && tz < CORE_Z0 + CORE.length // not the city in its columns
         if (c === '#') {
           // the city faces the far sidewalk; the museum's walls face its own floors, and outside the skin covers them
           if (AROUND.some(([a, b]) => 'so'.includes(at(tx + a, tz + b)))) t.houses.push(cell)
