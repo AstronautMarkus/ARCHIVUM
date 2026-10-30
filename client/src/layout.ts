@@ -8,7 +8,7 @@
 // fountain and cherry trees. Upper floors look down into it from balconies, and out through real windows at both ends.
 // Past the city to the west there's a forest, to the north a neighbourhood of houses along alleys, and in the
 // corner between them a little shrine; the street on the block's north side runs on west between shrine and forest.
-// A glass elevator rides up and down the courtyard's west edge, its doors opening onto the lobby of each floor.
+// Two glass elevators ride up and down the courtyard's west edge, their doors opening onto the lobby of each floor.
 // Rooms have a fixed width and grow in depth with their exhibits, so new content never moves existing rooms;
 // more rooms only make the building (and its courtyard) longer, the same for every floor, and push the block out.
 export const TILE = 2
@@ -52,10 +52,11 @@ export const CORE = [
   '##*##*###*##*#',
 ]
 export const CORE_X0 = -CORE[0].length, CORE_Z0 = -2
-// the elevator shaft: two tiles wide on the courtyard's west edge, beside the entrance axis (rows 6-7) so walking
-// in from the street you see straight into the courtyard; its doors face the lobby. z: center, w: width along z,
-// door: width of the opening, which leaves room on both sides for the open doors to slide away
-export const LIFT = { tx: 6, tz0: 4, tz1: 5, x0: 6 * TILE, z: 5 * TILE, w: 2 * TILE, door: 1.6 }
+// the elevator shafts: two tiles wide each on the courtyard's west edge, one either side of the entrance axis (rows
+// 6-7) so walking in from the street you see straight into the courtyard between them; their doors face the lobby.
+// z: center, w: width along z, door: width of the opening, which leaves room on both sides for the open doors to
+// slide away
+export const LIFTS = [4, 8].map((tz0) => ({ tx: 6, tz0, tz1: tz0 + 1, x0: 6 * TILE, z: (tz0 + 1) * TILE, w: 2 * TILE, door: 1.6 }))
 const ROOM_W = 5
 // rows of the ring: corridor 0-1, arcade 2, courtyard 3-10, arcade 11, corridor 12-13
 const RING_END = 13, COURT_Z0 = 3, COURT_Z1 = 10, LOBBY_X1 = 5, COURT_X0 = 7
@@ -166,8 +167,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     fill(mx, mx + 1, mz, mz + 1, 'F')
   } else fill(COURT_X0, courtX1, COURT_Z0, COURT_Z1, 'v')
   // around the courtyard, with no columns: an open ring on the ground floor, balconies upstairs
-  // (the elevator shaft takes its place in the ring first)
-  fill(LIFT.tx, LIFT.tx, LIFT.tz0, LIFT.tz1, 'E')
+  // (the elevator shafts take their places in the ring first)
+  for (const s of LIFTS) fill(s.tx, s.tx, s.tz0, s.tz1, 'E')
   const ax = LOBBY_X1 + 1, bx = courtX1 + 1, az = COURT_Z0 - 1, bz = COURT_Z1 + 1
   for (let tx = ax; tx <= bx; tx++) {
     for (let tz = az; tz <= bz; tz++) {
@@ -310,6 +311,8 @@ export function solidAt(l: Layout | undefined, x: number, z: number) {
   return SOLID.includes(c)
 }
 
-// is (x, z) in the lobby right in front of the elevator?
-export const atLiftDoor = (x: number, z: number) =>
-  Math.floor(x / TILE) === LIFT.tx - 1 && Math.floor(z / TILE) >= LIFT.tz0 && Math.floor(z / TILE) <= LIFT.tz1
+// which elevator's shaft (x, z) is in, and which one's doors it's right in front of in the lobby; -1 for none
+const liftAt = (tx: number, x: number, z: number) => Math.floor(x / TILE) !== tx ? -1
+  : LIFTS.findIndex((s) => Math.floor(z / TILE) >= s.tz0 && Math.floor(z / TILE) <= s.tz1)
+export const liftShaft = (x: number, z: number) => liftAt(LIFTS[0].tx, x, z)
+export const liftDoor = (x: number, z: number) => liftAt(LIFTS[0].tx - 1, x, z)

@@ -4,7 +4,7 @@ import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
-  atLiftDoor, buildBuilding, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFT, SPAWN, TILE, TORII, WALL_H,
+  buildBuilding, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, floorColor, isUnlocked, lockRoom, type Exhibit, type Floor, type Museum } from './api'
@@ -312,13 +312,11 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
           }
         }
       }))
-      // the glass shaft stands out into the courtyard and the slab's edge runs on around it, a tile's beam at a time,
-      // just outside its glass so the car clears it
-      const lo = y + WALL_H - BEAM, hi = roof ? top : y + WALL_H, mid = (lo + hi) / 2
-      ;(roof ? t.parapet : t.beams).push(...[-1, 1].flatMap((s): Box[] => [
-        [LIFT.x0 + (TILE + 0.24) / 2, mid, LIFT.z + s * (LIFT.w / 2 + 0.12), TILE + 0.24, hi - lo, 0.24],
-        [LIFT.x0 + TILE + 0.12, mid, LIFT.z + (s * TILE) / 2, 0.24, hi - lo, TILE],
-      ]))
+      // the slab's edge runs on across the glass where a shaft meets the courtyard, flush with the beams either side
+      // but thinner, so it stops just short of the car's glass back
+      const lo = y + WALL_H - BEAM, hi = roof ? top : y + WALL_H
+      ;(roof ? t.parapet : t.beams).push(...LIFTS.flatMap((s) => [-1, 1].map((d): Box =>
+        [s.x0 + TILE + 0.04, (lo + hi) / 2, s.z + (d * TILE) / 2, 0.16, hi - lo, TILE])))
     })
     // the outside of the museum: a thin skin just outside its outer walls, a box per tile and storey with a window
     // painted on every other tile, and a parapet on top, so inside you see your floor's own walls. Real windows leave
@@ -420,7 +418,7 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
       )}
       {ground.shrine && <Shrine at={ground.shrine} tex={{ wood, bark, stone: facade, lamp: light }} />}
       <Props props={ground.props} />
-      <Elevator floors={layouts.length} near={near} tex={{ stone, metal, lamp: lite, panel, plate, steel }} />
+      {LIFTS.map((_, i) => <Elevator key={i} i={i} floors={layouts.length} near={near} tex={{ stone, metal, lamp: lite, panel, plate, steel }} />)}
       {layouts.map((layout, k) => near(k) && (
         <group key={k} position-y={k * STOREY}>
           {layout.rooms.map((r) => (
@@ -494,18 +492,18 @@ function TileSet({ cells, tex, y = 0.005 }: { cells: Cell[]; tex: THREE.Texture;
   )
 }
 
-// The elevator: a glass shaft on the courtyard's west edge, with a car that really travels it. Player drives the
-// car (you call it from its door, ride it, pick a floor); this only draws it.
-// shortcut: each visitor has their own car, so a friend riding theirs seems to float up the shaft on your screen
+// The elevators: glass shafts on the courtyard's west edge, each with a car that really travels it. Player drives
+// the cars (you call one from its door, ride it, pick a floor); this only draws one.
+// shortcut: each visitor has their own cars, so a friend riding theirs seems to float up the shaft on your screen
 // at: floor it's at (fractional while moving); target: floor it's going to; doors: 0 shut .. 1 open;
 // v: speed in floors per second; still: seconds since it shut its doors or arrived, for the pauses in between
-const car = { at: 0, target: 0, doors: 0, v: 0, still: 1 }
+const cars = LIFTS.map(() => ({ at: 0, target: 0, doors: 0, v: 0, still: 1 }))
 const GLASS = { color: HAZE, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }
 
 type LiftTextures = Record<'stone' | 'metal' | 'lamp' | 'panel' | 'plate' | 'steel', THREE.Texture>
 
-function Elevator({ floors, near, tex }: { floors: number; near: (k: number) => boolean; tex: LiftTextures }) {
-  const { x0, z, w, door } = LIFT, cx = x0 + TILE / 2, H = floors * STOREY
+function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (k: number) => boolean; tex: LiftTextures }) {
+  const { x0, z, w, door } = LIFTS[i], car = cars[i], cx = x0 + TILE / 2, H = floors * STOREY
   const leafW = door / 2, panelW = (w - door) / 2 // two leaves fill the opening; the panels beside it hide them open
   const cab = useRef<THREE.Group>(null!)
   const leaves = [useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!)]
@@ -1199,24 +1197,25 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
   const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, 4), [])
   const dir = useMemo(() => new THREE.Vector3(), [])
 
-  // The floor you're on. Riding the elevator changes it here and reports it up; when `floor` changes from outside
-  // (the elevator buttons) while you're in the car, the car goes there. Arriving at the museum puts you in the
+  // The floor you're on. Riding an elevator changes it here and reports it up; when `floor` changes from outside
+  // (the elevator buttons) while you're in a car, that car goes there. Arriving at the museum puts you in the
   // street; anything else that moves you between floors drops you in that floor's lobby.
   const fl = useRef(floor)
   const arrived = useRef(false)
-  const inCar = () => tileAt(layouts[0], camera.position.x, camera.position.z) === 'E' // same shaft on every floor
+  const inCar = () => liftShaft(camera.position.x, camera.position.z) // which car you're in, -1 for none
   // elevator sounds from Freedoom, louder the closer you are to the car
   const sound = useMemo(() => Object.fromEntries(['dsbdopn', 'dsbdcls', 'dspstart', 'dspstop', 'dsswtchn']
     .map((name) => [name, new Audio(`/doom/${name}.wav`)])), [])
-  const play = (name: string) => {
-    const p = camera.position, d = Math.hypot(p.x - LIFT.x0 - TILE / 2, p.y - car.at * WALL_H - EYE, p.z - LIFT.z)
+  const play = (name: string, i: number) => {
+    const p = camera.position, d = Math.hypot(p.x - LIFTS[i].x0 - TILE / 2, p.y - cars[i].at * WALL_H - EYE, p.z - LIFTS[i].z)
     const a = sound[name], volume = Math.min(1, Math.max(0, 1 - d / 20)) * 0.7
     if (volume === 0) return
     a.currentTime = 0
     a.volume = volume
     a.play().catch(() => {}) // blocked until the first click
   }
-  const was = useRef({ doors: 0, moving: false }) // which way the doors went and whether the car moved, last frame
+  // which way each car's doors went and whether it moved, last frame
+  const was = useRef(LIFTS.map(() => ({ doors: 0, moving: false })))
   const spawn = (k: number) => {
     const s = arrived.current ? SPAWN : layouts[0].start
     arrived.current = true
@@ -1230,7 +1229,8 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     if (!arrived.current) spawn(floor)
     else if (floor !== fl.current) {
       // a button in the car: it goes there, and the HUD keeps showing the floor you're actually on
-      if (inCar()) { car.target = floor; play('dsswtchn'); onFloor(fl.current) }
+      const i = inCar()
+      if (i >= 0) { cars[i].target = floor; play('dsswtchn', i); onFloor(fl.current) }
       else spawn(floor)
     }
   }, [floor])
@@ -1264,42 +1264,45 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0)
     const step = (k.ShiftLeft || k.ShiftRight ? 8 : 4) * dt
     const magnitude = Math.hypot(fwd, side) || 1
-    const here = fl.current, l = layouts[here], riding = inCar()
-    car.target = Math.min(car.target, layouts.length - 1)
-    // the car, like a real one: standing at its door calls it to your floor. To go anywhere it shuts its doors,
+    const here = fl.current, l = layouts[here], riding = inCar(), calling = riding < 0 ? liftDoor(p.x, p.z) : -1
+    // each car, like a real one: standing at its door calls it to your floor. To go anywhere it shuts its doors,
     // waits a beat, speeds up gently, slows down as it gets close, stops, waits a beat, and only then opens its
     // doors (while you're at them or inside)
-    if (!riding && atLiftDoor(p.x, p.z)) car.target = here
-    const before = { doors: car.doors, at: car.at }
-    car.still += dt
-    if (car.at !== car.target) {
-      if (car.doors > 0) {
-        car.doors = Math.max(0, car.doors - dt * 1.5)
-        car.still = 0
+    cars.forEach((car, i) => {
+      car.target = Math.min(car.target, layouts.length - 1)
+      if (calling === i) car.target = here
+      const before = { doors: car.doors, at: car.at }
+      car.still += dt
+      if (car.at !== car.target) {
+        if (car.doors > 0) {
+          car.doors = Math.max(0, car.doors - dt * 1.5)
+          car.still = 0
+        } else if (car.still > 0.5) {
+          const d = car.target - car.at, cruise = Math.min(2.5, Math.max(0.35, Math.abs(d) * 0.6))
+          car.v = Math.min(cruise, car.v + dt * 1.2)
+          if (Math.abs(d) <= car.v * dt) Object.assign(car, { at: car.target, v: 0, still: 0 })
+          else car.at += Math.sign(d) * car.v * dt
+        }
       } else if (car.still > 0.5) {
-        const d = car.target - car.at, cruise = Math.min(2.5, Math.max(0.35, Math.abs(d) * 0.6))
-        car.v = Math.min(cruise, car.v + dt * 1.2)
-        if (Math.abs(d) <= car.v * dt) Object.assign(car, { at: car.target, v: 0, still: 0 })
-        else car.at += Math.sign(d) * car.v * dt
+        const wanted = riding === i || (car.at === here && Math.hypot(p.x - LIFTS[i].x0, p.z - LIFTS[i].z) < 3)
+        car.doors = THREE.MathUtils.clamp(car.doors + (wanted ? 1.5 : -1.5) * dt, 0, 1)
       }
-    } else if (car.still > 0.5) {
-      const wanted = riding || (car.at === here && Math.hypot(p.x - LIFT.x0, p.z - LIFT.z) < 3)
-      car.doors = THREE.MathUtils.clamp(car.doors + (wanted ? 1.5 : -1.5) * dt, 0, 1)
-    }
-    const doors = Math.sign(car.doors - before.doors), moving = car.at !== before.at
-    if (doors && doors !== was.current.doors) play(doors > 0 ? 'dsbdopn' : 'dsbdcls')
-    if (moving !== was.current.moving) play(moving ? 'dspstart' : 'dspstop')
-    was.current = { doors, moving }
+      const doors = Math.sign(car.doors - before.doors), moving = car.at !== before.at
+      if (doors && doors !== was.current[i].doors) play(doors > 0 ? 'dsbdopn' : 'dsbdcls', i)
+      if (moving !== was.current[i].moving) play(moving ? 'dspstart' : 'dspstop', i)
+      was.current[i] = { doors, moving }
+    })
 
     // what stops you: walls, desk, fountain, the shafts of columns; the front door until it's mostly up; and the
-    // car, which you only get in or out of through its doorway once the doors are open, from the tile in front
+    // cars, which you only get in or out of through their doorway once the doors are open, from the tile in front
     const open = (x: number, z: number) => {
-      const inside = tileAt(l, x, z) === 'E'
-      if (inside !== riding) {
-        const [ox, oz] = inside ? [p.x, p.z] : [x, z]
-        return car.at === here && car.doors >= 0.9 && atLiftDoor(ox, oz) && Math.abs(z - LIFT.z) < LIFT.door / 2
+      const shaft = liftShaft(x, z)
+      if (shaft !== riding) {
+        const i = Math.max(shaft, riding), car = cars[i], [ox, oz] = shaft >= 0 ? [p.x, p.z] : [x, z]
+        return Math.min(shaft, riding) < 0 && car.at === here && car.doors >= 0.9 && liftDoor(ox, oz) === i &&
+          Math.abs(z - LIFTS[i].z) < LIFTS[i].door / 2
       }
-      if (inside) return true
+      if (shaft >= 0) return true
       if (l.door && Math.abs(x - l.door.x) < TILE / 2 && tileAt(l, x, z) === 'D' && frontDoor.open < 0.8) return false
       if (blockedByRoomDoor(l, x, z)) return false
       return !solidAt(l, x, z)
@@ -1315,7 +1318,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     const headroom = (x: number, z: number) => here * WALL_H + Math.min(...feet.map(([a, b]) => ceiling(x + a, z + b))) - HEAD
     // mid-jump, a lintel stops you just like a wall does
     const free = (x: number, z: number) =>
-      feet.every(([a, b]) => open(x + a, z + b)) && (riding || p.y <= headroom(x, z))
+      feet.every(([a, b]) => open(x + a, z + b)) && (riding >= 0 || p.y <= headroom(x, z))
     const nx = p.x + (dir.x * fwd - dir.z * side) / magnitude * step
     const nz = p.z + (dir.z * fwd + dir.x * side) / magnitude * step
     const walk = (axis: 'x' | 'z', delta: number) => {
@@ -1333,8 +1336,8 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     walk('z', nz - p.z)
 
     // riding, you go wherever the car goes and the floor counts up as you pass them
-    if (riding) {
-      const passing = Math.round(car.at)
+    if (riding >= 0) {
+      const car = cars[riding], passing = Math.round(car.at)
       if (passing !== here) onFloor((fl.current = passing))
       p.y = car.at * WALL_H + EYE
       verticalSpeed.current = 0
@@ -1358,7 +1361,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     }
     const f = fl.current
     const at = (x: number, z: number) => tileAt(layouts[f], x, z)
-    const elevator = inCar()
+    const elevator = inCar() >= 0
     if (elevator !== last.current.elevator) onElevator((last.current.elevator = elevator))
 
     // outside the fog turns into a light haze, and so it does at a window, where you look out; inside it's Doom

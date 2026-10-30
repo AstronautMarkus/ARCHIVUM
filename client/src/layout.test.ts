@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  atLiftDoor, buildBuilding, buildFloor, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, LIFT, SOLID, SPAWN, TILE, TORII,
+  buildBuilding, buildFloor, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, LIFTS, SOLID, SPAWN, TILE, TORII,
 } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
@@ -47,13 +47,19 @@ test('the ground floor: street, front door, lobby, courtyard and rooms all conne
   assert.ok(solidAt(l, e.x + 1, e.z - e.w / 2 + 1) && solidAt(l, e.x + 1, e.z + e.w / 2 - 1), 'a pier at either end')
 })
 
-test('the elevator shaft is in the same place on every floor, its doors facing the lobby', () => {
+test('the elevator shafts are in the same places on every floor, their doors facing the lobby', () => {
   const floors = buildBuilding([rooms([2]), rooms([1, 1, 1]), rooms([])])
   for (const l of floors) {
-    for (const dz of [-1, 1]) assert.equal(tileAt(l, LIFT.x0 + 1, LIFT.z + dz), 'E')
-    assert.equal(tileAt(l, LIFT.x0 - 1, LIFT.z), 'L')
-    assert.ok(atLiftDoor(LIFT.x0 - 1, LIFT.z) && !atLiftDoor(LIFT.x0 - 1, LIFT.z + LIFT.w / 2 + 0.5))
-    for (const z of [13.8, 14.2]) assert.notEqual(tileAt(l, LIFT.x0 + 1, z), 'E', 'the entrance axis (z = 14) stays clear')
+    LIFTS.forEach((s, i) => {
+      for (const dz of [-1, 1]) {
+        assert.equal(tileAt(l, s.x0 + 1, s.z + dz), 'E')
+        assert.equal(liftShaft(s.x0 + 1, s.z + dz), i)
+      }
+      assert.equal(tileAt(l, s.x0 - 1, s.z), 'L')
+      assert.equal(liftDoor(s.x0 - 1, s.z), i)
+      assert.equal(liftDoor(s.x0 - 1, s.z + s.w / 2 + 0.5), -1, 'only right in front of its doors')
+    })
+    for (const z of [13.8, 14.2]) assert.notEqual(tileAt(l, LIFTS[0].x0 + 1, z), 'E', 'the entrance axis (z = 14) stays clear')
     assert.ok(reachableAll(l))
   }
 })
