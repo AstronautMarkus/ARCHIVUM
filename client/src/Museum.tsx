@@ -7,6 +7,7 @@ import {
   buildBuilding, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
+import { LIVE_URL } from './config'
 import { fileUrl, floorColor, isUnlocked, lockRoom, type Exhibit, type Floor, type Museum } from './api'
 import { cantera, ceiling, checker, hedge, limestone, pennant, railing, spots, whiteBrick } from './textures'
 import core from './core.json'
@@ -1396,7 +1397,6 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
 // ---- other visitors ----
 
 type Peer = { n: string; f: string; x: number; z: number; y: number; h: number; t: number }
-const LIVE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 // Freedoom marine: frames a-d (walk cycle) x rotations 1-5; 6-8 are 4-2 mirrored
 const SPRITES = [...'abcd'].flatMap((f) => [`${f}1`, `${f}2${f}8`, `${f}3${f}7`, `${f}4${f}6`, `${f}5`].map((r) => `/doom/play${r}.png`))
 const PX = 1.8 / 56 // sprite pixels to meters: the marine is 56px tall
@@ -1416,7 +1416,7 @@ function Avatars({ floorId, token, onChanged, onChat, say }: Pick<Props, 'token'
       setIds((prev) => (prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next))
     }
     const connect = () => {
-      sock = ws.current = new WebSocket(LIVE)
+      sock = ws.current = new WebSocket(LIVE_URL)
       say.current = (text) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ chat: text })) }
       sock.onopen = () => {
         sock.send(JSON.stringify({ token }))

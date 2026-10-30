@@ -18,12 +18,12 @@ Sus cuadros están en `client/src/core.json` (`file` y `caption`) y las imágene
 
 ## Correr en local
 
-Necesitas MongoDB corriendo en `localhost:27017` (o apunta `MONGO_URL` a tu base).
+Necesitas MongoDB corriendo en `localhost:27017` (o apunta `MONGO_URL` a tu base). La configuración va en `server/.env` (copia `server/.env.example`); las variables de entorno reales tienen prioridad. El cliente se configura en `client/.env.local` (copia `client/.env.example`): `API_PROXY` cambia a dónde apunta `npm run dev`, y `VITE_API_URL` sirve solo si hospedas el cliente aparte de Flask (agrega su origen a `CORS_ORIGINS` del server).
 
 ```sh
 cd server
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/gunicorn -w 1 --threads 50 --reload -b 127.0.0.1:8000 app:app
+.venv/bin/gunicorn -w 1 --threads 50 --reload -b 127.0.0.1:8000 wsgi:app
 
 cd client                                     # en otra terminal
 npm install && npm run dev                    # http://localhost:5173
@@ -32,7 +32,7 @@ npm install && npm run dev                    # http://localhost:5173
 El primer admin: regístrate en el museo y después corre
 
 ```sh
-cd server && .venv/bin/flask --app app make-admin tu@email.com
+cd server && .venv/bin/flask --app wsgi make-admin tu@email.com
 ```
 
 ## Salas con PIN
@@ -77,7 +77,8 @@ En la pausa (Esc) eliges la distancia de dibujado (lejos, media o niebla) y pren
 
 ```sh
 cd client && npm run build                    # Flask sirve client/dist
-cd server && SECRET_KEY=... MONGO_URL=... .venv/bin/gunicorn -w 1 --threads 50 -b 127.0.0.1:8000 app:app
+# en server/.env: SECRET_KEY y MONGO_URL
+cd server && .venv/bin/gunicorn -w 1 --threads 50 -b 127.0.0.1:8000 wsgi:app
 ```
 
 - **Un solo worker** (`-w 1`): la lista de visitantes conectados vive en memoria. Cada visitante ocupa un thread, así que `--threads` es el máximo de gente conectada a la vez.

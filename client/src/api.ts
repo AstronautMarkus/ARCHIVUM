@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { API_URL } from './config'
 
 export type User = { id: string; email: string; name: string; curator: boolean; admin: boolean }
 export type Floor = { id: string; name: string; color?: string } // its floor is `color` and white
@@ -37,14 +38,14 @@ export async function api<T = unknown>(path: string, { json, ...init }: RequestI
   const headers: Record<string, string> = session.token ? { Authorization: `Bearer ${session.token}` } : {}
   if (json !== undefined) headers['Content-Type'] = 'application/json'
   if (roomTokens.size) headers['X-Room-Tokens'] = [...roomTokens.values()].join(',')
-  const res = await fetch(`/api${path}`, { ...init, headers, body: json !== undefined ? JSON.stringify(json) : init.body })
+  const res = await fetch(`${API_URL}/api${path}`, { ...init, headers, body: json !== undefined ? JSON.stringify(json) : init.body })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw Object.assign(new Error(data.error ?? `Error ${res.status}`), { status: res.status })
   return data as T
 }
 
 // the core's art (core.json) ships with the client under an absolute path; everything else was uploaded
-export const fileUrl = (e: Exhibit, thumb?: boolean) => (e.file.startsWith('/') ? e.file : `/files/${thumb && e.thumb ? e.thumb : e.file}`)
+export const fileUrl = (e: Exhibit, thumb?: boolean) => (e.file.startsWith('/') ? e.file : `${API_URL}/files/${thumb && e.thumb ? e.thumb : e.file}`)
 export const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 // the whole museum; reload() runs again when the server pushes a change

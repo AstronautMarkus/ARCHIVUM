@@ -4,13 +4,14 @@ import os
 import tempfile
 import unittest
 
-os.environ['MONGO_URL'] = 'mongodb://localhost:27017/archivum_test'
-os.environ['UPLOADS_DIR'] = tempfile.mkdtemp()
-os.environ['SECRET_KEY'] = 'test'
+from PIL import Image
 
-from PIL import Image  # noqa: E402
+from archivum import create_app, museum
 
-import app as server  # noqa: E402
+app = create_app({'MONGO_URL': 'mongodb://localhost:27017/archivum_test', 'UPLOADS_DIR': tempfile.mkdtemp(),
+                  'SECRET_KEY': 'test', 'CORS_ORIGINS': ['https://cliente.test']})
+db = app.extensions['mongo']
+UPLOADS = app.config['UPLOADS_DIR']
 
 
 def png():
@@ -23,8 +24,8 @@ def png():
 class Api(unittest.TestCase):
     def setUp(self):
         for c in ('users', 'floors', 'rooms', 'exhibits'):
-            server.db[c].delete_many({})
-        self.c = server.app.test_client()
+            db[c].delete_many({})
+        self.c = app.test_client()
 
     def account(self, name, **roles):
         # tries to self-promote on register; the server must ignore it
@@ -33,7 +34,7 @@ class Api(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.json)
         self.assertFalse(r.json['user']['curator'] or r.json['user']['admin'])
         self.assertNotIn('password', r.json['user'])
-        server.db.users.update_one({'email': f'{name}@t.test'}, {'$set': roles})
+        db.users.update_one({'email': f'{name}@t.test'}, {'$set': roles})
         return {'Authorization': f"Bearer {r.json['token']}"}, r.json['user']['id']
 
     def room(self, auth):
@@ -72,10 +73,10 @@ class Api(unittest.TestCase):
 
     def test_floor_limit(self):
         curator, _ = self.account('cura', curator=True)
-        server.db.floors.insert_many([{'name': f'{i}', 'order': i} for i in range(server.MAX_FLOORS - 1)])
+        db.floors.insert_many([{'name': f'{i}', 'order': i} for i in range(museum.MAX_FLOORS - 1)])
         self.assertEqual(self.c.post('/api/floors', json={'name': 'último'}, headers=curator).status_code, 201)
         r = self.c.post('/api/floors', json={'name': 'uno más'}, headers=curator)
-        self.assertEqual((r.status_code, server.db.floors.count_documents({})), (400, server.MAX_FLOORS))
+        self.assertEqual((r.status_code, db.floors.count_documents({})), (400, museum.MAX_FLOORS))
 
     def test_uploads(self):
         curator, uid = self.account('cura', curator=True)
@@ -91,16 +92,16 @@ class Api(unittest.TestCase):
         self.assertEqual((full.mimetype, full.headers['X-Content-Type-Options']), ('image/png', 'nosniff'))
         full.close()
 
-        before = set(os.listdir(server.UPLOADS))
+        before = set(os.listdir(UPLOADS))
         fake = (io.BytesIO(b'<script>alert(1)</script>'), 'x.png', 'image/png')
         self.assertEqual(self.upload(curator, room, file=fake).status_code, 400)
         html = (io.BytesIO(b'<script>alert(1)</script>'), 'x.html', 'text/html')
         self.assertEqual(self.upload(curator, room, file=html).status_code, 400)
-        self.assertEqual(set(os.listdir(server.UPLOADS)), before, 'rejected files are not kept')
+        self.assertEqual(set(os.listdir(UPLOADS)), before, 'rejected files are not kept')
 
         self.assertEqual(self.upload(curator, room, text='Nunca olvidar').json['kind'], 'note')
         self.assertEqual(self.upload(curator, room).status_code, 400)
-        self.assertEqual(self.c.get('/files/..%2Fapp.py').status_code, 404)
+        self.assertEqual(self.c.get('/files/..%2Fwsgi.py').status_code, 404)
 
     def test_delete_rules(self):
         ana, _ = self.account('ana', curator=True)
@@ -110,14 +111,14 @@ class Api(unittest.TestCase):
         mine = self.upload(ana, room, file=(png(), 'p.png', 'image/png')).json
         self.assertEqual(self.c.delete(f"/api/exhibits/{mine['id']}", headers=beto).status_code, 403)
         self.assertEqual(self.c.delete(f"/api/exhibits/{mine['id']}", headers=ana).status_code, 204)
-        self.assertFalse((server.UPLOADS / mine['file']).exists())
+        self.assertFalse((UPLOADS / mine['file']).exists())
 
         kept = self.upload(beto, room, file=(png(), 'p.png', 'image/png')).json
         self.assertEqual(self.c.delete(f"/api/floors/{room['floor']}", headers=ana).status_code, 403)
         self.assertEqual(self.c.delete(f"/api/floors/{room['floor']}", headers=admin).status_code, 204)
         m = self.c.get('/api/museum').json
         self.assertEqual((m['floors'], m['rooms'], m['exhibits']), ([], [], []))
-        self.assertFalse((server.UPLOADS / kept['thumb']).exists())
+        self.assertFalse((UPLOADS / kept['thumb']).exists())
 
     def test_pin_rooms(self):
         curator, _ = self.account('cura', curator=True)
@@ -126,7 +127,7 @@ class Api(unittest.TestCase):
             self.assertEqual(self.c.post('/api/rooms', json={'floor': floor['id'], 'title': 'x', 'pin': bad}, headers=curator).status_code, 400)
         room = self.c.post('/api/rooms', json={'floor': floor['id'], 'title': 'Secreta', 'pin': '6767'}, headers=curator).json
         self.assertNotIn('pin', room)
-        self.assertTrue(server.db.rooms.find_one()['pin'].startswith(('scrypt', 'pbkdf2')))
+        self.assertTrue(db.rooms.find_one()['pin'].startswith(('scrypt', 'pbkdf2')))
         self.upload(curator, room, text='secreto')
 
         # visitors see the room is locked, how full it is, and none of its exhibits
@@ -152,11 +153,17 @@ class Api(unittest.TestCase):
         curator, _ = self.account('cura', curator=True)
         floor = self.c.post('/api/floors', json={'name': 'Piso 1'}, headers=curator).json
         room = self.c.post('/api/rooms', json={'floor': floor['id'], 'title': 'S', 'pin': '6767'}, headers=curator).json
-        server.failures.clear()
+        museum.failures.clear()
         url = f"/api/rooms/{room['id']}/unlock"
-        codes = [self.c.post(url, json={'pin': '0000'}).status_code for _ in range(server.PIN_TRIES + 1)]
-        self.assertEqual(codes, [403] * server.PIN_TRIES + [429])
+        codes = [self.c.post(url, json={'pin': '0000'}).status_code for _ in range(museum.PIN_TRIES + 1)]
+        self.assertEqual(codes, [403] * museum.PIN_TRIES + [429])
         self.assertEqual(self.c.post(url, json={'pin': '6767'}).status_code, 429)  # even the right one, until it passes
+
+    def test_cors_only_for_listed_origins(self):
+        ok = self.c.options('/api/login', headers={'Origin': 'https://cliente.test', 'Access-Control-Request-Method': 'POST'})
+        self.assertEqual(ok.headers.get('Access-Control-Allow-Origin'), 'https://cliente.test')
+        self.assertIn('Authorization', ok.headers['Access-Control-Allow-Headers'])
+        self.assertNotIn('Access-Control-Allow-Origin', self.c.get('/api/museum', headers={'Origin': 'https://malo.test'}).headers)
 
     def test_admin_manages_curators(self):
         cura, _ = self.account('cura', curator=True)
