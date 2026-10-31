@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBuilding, buildFloor, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, LIFTS, SOLID, SPAWN, TILE, TORII,
+  buildBuilding, buildFloor, liftDoor, liftShaft, placeAt, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, LIFTS, SOLID, SPAWN, TILE, TORII,
 } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
@@ -191,4 +191,20 @@ test('a PIN room has its door in the doorway, with wall beside it for the keypad
     assert.equal(tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), 'D')
     assert.ok(solidAt(l, (tx + 1.5) * TILE, (tz + 0.5) * TILE))
   }
+})
+
+test('the map names where you stand: each room inside its walls, and the places around them', () => {
+  const l = buildFloor(rooms([3, 12]), { ground: true })
+  for (const r of l.rooms) {
+    const { x0, x1, z0, z1 } = r.area
+    for (let tx = x0; tx <= x1; tx++) for (let tz = z0; tz <= z1; tz++) {
+      assert.equal(tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), '.')
+      assert.equal(placeAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), r.title)
+    }
+    // the doorway is still the corridor
+    assert.notEqual(placeAt(l, (r.door.tx + 0.5) * TILE, (r.door.tz + 0.5) * TILE), r.title)
+  }
+  assert.equal(placeAt(l, SPAWN.x, SPAWN.z), 'Lobby')
+  assert.equal(placeAt(l, l.court!.fountain.x - TILE * 2.5, l.court!.fountain.z - TILE * 1.5), 'Patio')
+  assert.equal(placeAt(l, l.start.x, l.start.z), 'Exterior')
 })

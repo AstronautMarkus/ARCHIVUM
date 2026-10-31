@@ -44,7 +44,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [chat, setChat] = useState<(Chat & { key: number })[]>([])
   const [saved, setView] = useSaved('view', 'media'), [fps, setFps] = useSaved('fps', 'no')
   const view: View = saved in VIEWS ? (saved as View) : 'media'
-  const fpsEl = useRef<HTMLDivElement>(null)
+  const [bigMap, setBigMap] = useState(false)
+  const fpsEl = useRef<HTMLDivElement>(null), mapEl = useRef<HTMLCanvasElement>(null)
   const say = useRef<(text: string) => void>(() => {})
   const onChat = useCallback((m: Chat) => setChat((c) => [...c.slice(-7), { ...m, key: ++lineKey }]), [])
   const floors = museum.floors
@@ -67,6 +68,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       if (e.code === 'KeyE' && act?.kind === 'pin') { setTyping(act); document.exitPointerLock() }
       if (e.code === 'KeyE' && act?.kind === 'exit') openRoomDoor(act.room)
       if (e.code === 'KeyT' && user) { e.preventDefault(); setTalking(true) } // T talks, like in DOOM
+      // and Tab opens the map; with the mouse free it still moves the focus
+      if (e.code === 'Tab' && document.pointerLockElement) { e.preventDefault(); setBigMap((b) => !b) }
       if (!elevator) return
       const n = Number(e.key), go = (k: number) => setFloorIdx(Math.max(0, Math.min(floors.length - 1, k)))
       if (n >= 1 && n <= 9) go(n - 1)
@@ -84,7 +87,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
   return (
     <>
-      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} onFloor={setFloorIdx}
+      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} map={mapEl} bigMap={bigMap} onFloor={setFloorIdx}
         onElevator={setElevator} onPick={setPicked} onAct={setAct} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
@@ -107,6 +110,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
             </form>
           )}
         </div>
+        <canvas className={bigMap ? 'automap big' : 'automap'} ref={mapEl} aria-label="Mapa" />
         {fps === 'sí' && <div className="fps" ref={fpsEl} />}
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
@@ -128,7 +132,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           <div>
             <h1>ARCHIVUM</h1>
             <p>Click para entrar</p>
-            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · Espacio: saltar · E: ver de cerca · T: chatear · Esc: salir</p>
+            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · Espacio: saltar · E: ver de cerca · T: chatear · Tab: mapa · Esc: salir</p>
           </div>
         </div>
       )}

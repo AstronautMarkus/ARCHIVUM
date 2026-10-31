@@ -18,6 +18,7 @@ export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE } // a safe spot in the lobb
 // wall, fountain, reception desk, courtyard void, 'H' a block drawn by its own component (the shrine's hall, the
 // entrance's piers), hedge; posts, the elevator and the core's slanted walls are special
 export const SOLID = '#FRvHh'
+export const OUTDOOR = 'osgpT' // tiles under the open sky
 export const MAX_FLOORS = 99
 export const COLUMN = 0.35 // half the width of a column
 export const TORII = 2.3 // how far each pillar of the shrine's torii stands from the middle of its path
@@ -73,6 +74,7 @@ export type Slot = { x: number; z: number; rot: number } // a point on a wall su
 // something you walk right up to and around: it stops you only within r of (x, z), a square like a column's
 export type Post = { x: number; z: number; r: number }
 export type Prop = { kind: 'tree' | 'oak' | 'lamp' | 'sakura' | 'statue' | 'light'; x: number; z: number; s?: number } // s: scale
+type Box = { x0: number; x1: number; z0: number; z1: number }
 export type Layout = {
   // rows[tz - z0][tx - x0]: SOLID tiles, '.' floor, 'L' lobby, 'D' doorway, 'C' column, 'E' elevator shaft,
   // 'B' balcony (floor with a railing on its courtyard side), 'W' a window you step into, glazed on its outer side,
@@ -86,7 +88,8 @@ export type Layout = {
   props: Prop[]
   // a locked room has a PIN door in its doorway (tile `door`, which the room is `dir` away from: -1 north, 1 south),
   // a keypad beside it in the corridor and an exit button beside it inside
-  rooms: { id: string; title: string; sign: Slot; slots: Slot[]; locked: boolean; dir: number; door: { tx: number; tz: number } }[]
+  // area: the room's floor, in tiles (inclusive)
+  rooms: { id: string; title: string; sign: Slot; slots: Slot[]; locked: boolean; dir: number; door: { tx: number; tz: number }; area: Box }[]
   door?: { x: number; z: number; w: number } // the front door (ground floor), world units
   // the entrance tower around the door: its front x, center z, width and the porch's depth, its two columns and the
   // flagpoles out in the garden; world units
@@ -228,7 +231,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
 
     // sign on the corridor side of the door lintel
     const sign = { x: (doorX + 0.5) * TILE, z: (doorZ + 0.5 - dir / 2) * TILE - dir * 0.03, rot: dir < 0 ? 0 : Math.PI }
-    return { id: r.id, title: r.title, sign, slots: slots.slice(0, r.count), locked: !!r.locked, dir, door: { tx: doorX, tz: doorZ } }
+    const area = { x0: rx, x1: rx + ROOM_W - 1, z0: Math.min(doorZ + dir, far), z1: Math.max(doorZ + dir, far) }
+    return { id: r.id, title: r.title, sign, slots: slots.slice(0, r.count), locked: !!r.locked, dir, door: { tx: doorX, tz: doorZ }, area }
   })
 
   if (!ground) return { rows: grid.map((r) => r.join('')), x0, z0, footprint: box, start: SPAWN, props: [], rooms: out, posts }
@@ -316,3 +320,16 @@ const liftAt = (tx: number, x: number, z: number) => Math.floor(x / TILE) !== tx
   : LIFTS.findIndex((s) => Math.floor(z / TILE) >= s.tz0 && Math.floor(z / TILE) <= s.tz1)
 export const liftShaft = (x: number, z: number) => liftAt(LIFTS[0].tx, x, z)
 export const liftDoor = (x: number, z: number) => liftAt(LIFTS[0].tx - 1, x, z)
+
+const inside = (b: Box, tx: number, tz: number) => tx >= b.x0 && tx <= b.x1 && tz >= b.z0 && tz <= b.z1
+// what the map calls the place at (x, z), world units
+export function placeAt(l: Layout | undefined, x: number, z: number) {
+  const tx = Math.floor(x / TILE), tz = Math.floor(z / TILE), c = tileAt(l, x, z)
+  const room = l?.rooms.find((r) => inside(r.area, tx, tz))
+  if (room) return room.title
+  if (l?.court && inside(l.court, x, z) && OUTDOOR.includes(c)) return 'Patio'
+  if (c === 'E') return 'Ascensor'
+  if (OUTDOOR.includes(c)) return 'Exterior'
+  if (tx < 0) return 'Núcleo'
+  return c === 'L' ? 'Lobby' : 'Pasillo'
+}
