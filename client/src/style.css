@@ -37,9 +37,9 @@ label { display: grid; gap: 2px; }
 .dash header b { letter-spacing: 2px; }
 .dash header span { color: #9ca3af; }
 .dash header nav { margin-left: auto; display: flex; gap: 16px; align-items: center; }
-.dash header a, .dash header .link { color: #d1d5db; }
+.dash header a, .dash header button.link { color: #d1d5db; }
 .dash main { max-width: 1200px; margin: 0 auto; padding: 24px; display: grid; gap: 16px; }
-.dash button { background: #2563eb; color: #fff; border-radius: 6px; padding: 6px 12px; }
+.dash button { background: #2563eb; color: #fff; border-radius: 6px; padding: 6px 12px; white-space: nowrap; }
 .dash button.link { background: none; color: #2563eb; padding: 0; }
 .dash input, .dash textarea { background: #fff; color: inherit; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 8px; }
 .dash .error { color: #dc2626; margin: 0; }
@@ -122,6 +122,7 @@ label { display: grid; gap: 2px; }
 /* ---- the front page: a 2000s game portal ---- */
 .portal { --o1: #ffb02e; --o2: #e05a00; --box: #241b12; --edge: #5c4122; max-width: 1000px; margin: 0 auto; padding: 0 8px 24px;
   color: #e9dfc8; font: 12px/1.35 Verdana, Tahoma, sans-serif; }
+html:has(.portal) :is(body, #root) { background: none; }
 html:has(.portal) { background: #120d08 repeating-linear-gradient(45deg, #0000 0 6px, #ffffff06 6px 12px); }
 .portal a { color: var(--o1); }
 .portal button { font: inherit; }
@@ -177,7 +178,7 @@ kbd { display: inline-block; min-width: 22px; padding: 0 4px; text-align: center
 .p-two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .p-table { width: 100%; border-collapse: collapse; }
 .p-table td { padding: 3px 4px; border-bottom: 1px dotted var(--edge); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.p-table td:last-child { text-align: right; color: #a8957a; }
+.p-table td:last-child:not(:first-child) { text-align: right; color: #a8957a; }
 .p-foot { display: block; margin-top: 6px; text-align: right; font-weight: bold; }
 .p-shots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .p-shots figure, .p-posters figure { margin: 0; }

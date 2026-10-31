@@ -166,7 +166,7 @@ export function Home({ museum, user }: { museum: Museum; user: User | null }) {
 
         <aside className="p-posters">
           <Box title="En el núcleo">
-            {core.slice(0, 6).map((c) => (
+            {core.slice(0, 4).map((c) => (
               <figure key={c.file}><img src={c.file} alt="" loading="lazy" /><figcaption>{c.caption.split(' · ')[0]}</figcaption></figure>
             ))}
           </Box>

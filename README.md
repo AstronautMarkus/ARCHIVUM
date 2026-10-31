@@ -3,7 +3,7 @@
 Museo digital estilo DOOM con los mejores momentos del grupo. Cada piso y sala que se crea en el panel aparece sola en el mundo 3D, en vivo, para todos los que estén conectados.
 
 ```
-client/   React + react-three-fiber. El museo 3D (render a ~240 líneas) y el panel (#admin)
+client/   React + react-three-fiber. La portada (/), el museo 3D en /play (render a ~240 líneas) y el panel (/admin)
 server/   Flask + MongoDB. Cuentas, permisos, subidas, miniaturas y un WebSocket
           que reparte las posiciones de los visitantes y avisa cuando el museo cambia
 ```
