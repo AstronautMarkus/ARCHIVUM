@@ -11,6 +11,7 @@ export type Exhibit = {
   id: string; room: string; author: string; kind: 'photo' | 'video' | 'audio' | 'note'
   file: string; thumb: string; caption: string; text: string
 }
+export const KIND = { photo: 'Foto', video: 'Video', audio: 'Música', note: 'Nota' }
 export type Museum = { floors: Floor[]; rooms: Room[]; exhibits: Exhibit[] }
 
 // the session survives reloads in localStorage

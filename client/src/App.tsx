@@ -1,26 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fileUrl, getToken, logout, useMuseum, useUser, type Exhibit, type Museum, type User } from './api'
+import { fileUrl, getToken, KIND, logout, useMuseum, useUser, type Exhibit, type Museum, type User } from './api'
 import { MuseumView, openRoomDoor, VIEWS, type Act, type Chat, type View } from './Museum'
 import { Keypad } from './Keypad'
 import { Admin } from './Admin'
 import { AuthForm } from './Auth'
+import { Home } from './Home'
 
+if (location.hash === '#admin') location.replace('/admin') // the panel's old address
+
+// each page is its own address and a plain link between them reloads the page: the game starts fresh every time
 export default function App() {
-  const [hash, setHash] = useState(location.hash)
-  useEffect(() => {
-    const onHash = () => setHash(location.hash)
-    addEventListener('hashchange', onHash)
-    return () => removeEventListener('hashchange', onHash)
-  }, [])
   const user = useUser()
   const { data, error, reload } = useMuseum()
+  const path = location.pathname.replace(/\/+$/, '')
   if (!data) return <p className="center">{error ? `No se pudo conectar: ${error}` : 'Cargando…'}</p>
-  return hash === '#admin'
-    ? <Admin museum={data} user={user} reload={reload} />
-    : <Visit museum={data} user={user} reload={reload} />
+  if (path === '/play') return <Visit museum={data} user={user} reload={reload} />
+  if (path === '/admin') return <Admin museum={data} user={user} reload={reload} />
+  return <Home museum={data} user={user} />
 }
 
-const KIND = { photo: 'Foto', video: 'Video', audio: 'Música', note: 'Nota' }
 let lineKey = 0
 
 // a setting remembered in this browser; if storage is blocked (private mode) it just isn't remembered
@@ -84,7 +82,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
     return () => { removeEventListener('keydown', onKey); removeEventListener('keyup', onUp) }
   }, [picked, act, viewing, typing, elevator, floors.length, current, user])
 
-  if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
+  if (!floor) return <p className="center">El museo está vacío. <a href="/admin">Crea el primer piso en el panel</a></p>
   return (
     <>
       <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} map={mapEl} bigMap={bigMap} onFloor={setFloorIdx}
@@ -93,7 +91,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
         <div className="top">
           <span>ARCHIVUM · {floor.name} ({current + 1}/{floors.length})</span>
           {user
-            ? <span>{user.name} · <a href="#admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
+            ? <span>{user.name} · <a href="/">Inicio</a> · <a href="/admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
             : <button onClick={() => setLogin(true)}>Entrar / Registrarse</button>}
         </div>
         <div className={talking ? 'chat open' : 'chat'} aria-live="polite">

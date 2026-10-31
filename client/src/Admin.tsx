@@ -1,12 +1,25 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, errorText, fileUrl, floorColor, FLOOR_COLORS, type Exhibit, type Floor, type Museum, type Room, type User } from './api'
+import { api, errorText, fileUrl, floorColor, FLOOR_COLORS, logout, type Exhibit, type Floor, type Museum, type Room, type User } from './api'
 import { AuthForm } from './Auth'
 
 const ACCEPT = 'image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/wav,audio/mp4'
 const ICON = { photo: '▣', video: '▶', audio: '♪', note: '✎' }
 
-function Page({ children }: { children: ReactNode }) {
-  return <main className="page"><h1>ARCHIVUM · Panel</h1><p><a href="#">← Volver al museo</a></p>{children}</main>
+// the panel is a plain tool, nothing like the game or the front page
+function Page({ user, children }: { user: User | null; children: ReactNode }) {
+  return (
+    <div className="dash">
+      <header>
+        <b>ARCHIVUM</b><span>Panel</span>
+        <nav>
+          <a href="/">Ver sitio</a>
+          <a href="/play">Jugar</a>
+          {user && <button className="link" onClick={logout}>Salir</button>}
+        </nav>
+      </header>
+      <main>{children}</main>
+    </div>
+  )
 }
 
 function Pick<T extends { id: string }>({ items, label, selected, onSelect, onDelete, swatch }: {
@@ -34,20 +47,23 @@ function Users() {
   const toggle = (u: User) =>
     api(`/users/${u.id}`, { method: 'PATCH', json: { curator: !u.curator } }).then(load).catch((e) => setError(errorText(e)))
   return (
-    <section>
+    <section className="wide">
       <h2>Usuarios</h2>
       {error && <p className="error" role="alert">{error}</p>}
-      <ul>
-        {users.map((u) => (
-          <li key={u.id}>
-            <label className="check">
-              <input type="checkbox" checked={u.curator || u.admin} disabled={u.admin} onChange={() => toggle(u)} />
-              {u.name} <small>{u.email}{u.admin ? ' · admin' : ''}</small>
-            </label>
-          </li>
-        ))}
-      </ul>
-      <small>Marcado = curador (puede subir contenido)</small>
+      <table>
+        <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Curador</th></tr></thead>
+        <tbody>
+          {users.map((u) => (
+            <tr key={u.id}>
+              <td>{u.name}</td>
+              <td>{u.email}</td>
+              <td>{u.admin ? 'Admin' : u.curator ? 'Curador' : 'Visitante'}</td>
+              <td><input type="checkbox" aria-label={`${u.name} es curador`} checked={u.curator || u.admin} disabled={u.admin} onChange={() => toggle(u)} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <small>Los curadores pueden crear pisos y salas y subir contenido.</small>
     </section>
   )
 }
@@ -58,9 +74,9 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
 
-  if (!user) return <Page><AuthForm /></Page>
+  if (!user) return <Page user={user}><AuthForm /></Page>
   if (!user.curator && !user.admin) {
-    return <Page><p>Hola {user.name}. Tu cuenta todavía no es de curador: pídele al admin que te active en este panel.</p></Page>
+    return <Page user={user}><p>Hola {user.name}. Tu cuenta todavía no es de curador: pídele al admin que te active en este panel.</p></Page>
   }
 
   const run = (label: string, fn: () => Promise<unknown>) => {
@@ -111,10 +127,15 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
   }
 
   return (
-    <Page>
-      <p>{user.admin ? 'Admin' : 'Curador'}: {user.name}</p>
+    <Page user={user}>
+      <div className="stats">
+        <div><b>{museum.floors.length}</b>Pisos</div>
+        <div><b>{museum.rooms.length}</b>Salas</div>
+        <div><b>{museum.exhibits.length}</b>Obras</div>
+        <div><b>{user.name}</b>{user.admin ? 'Admin' : 'Curador'}</div>
+      </div>
       {error && <p className="error" role="alert">{error}</p>}
-      {busy && <p role="status">{busy}</p>}
+      {busy && <p className="busy" role="status">{busy}</p>}
       <div className="cols">
         <section>
           <h2>Pisos</h2>

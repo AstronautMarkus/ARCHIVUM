@@ -36,7 +36,10 @@ def create_app(overrides=None):
                                 'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE'})
         return res
 
+    # the client's pages: each one is the same app, which reads the address
     @app.get('/')
+    @app.get('/play')
+    @app.get('/admin')
     def index():
         return app.send_static_file('index.html')
 
