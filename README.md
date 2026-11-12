@@ -39,6 +39,12 @@ cd server && .venv/bin/flask --app wsgi make-admin tu@email.com
 
 Al crear una sala (o después, en el panel) se le puede poner un PIN de 4 dígitos. Su puerta queda cerrada y junto a ella hay un teclado: apunta y pulsa **E**. El servidor revisa el PIN (guardado con hash, con límite de intentos) y responde con un token que desbloquea las piezas de esa sala; el cliente nunca recibe el PIN ni el contenido sin él. La puerta se abre, se cierra detrás de quien entra y adentro hay un botón **SALIDA** (apunta y **E**) que la vuelve a abrir. Al salir la sala se bloquea de nuevo y hay que teclear el PIN otra vez.
 
+## La torre y la oficina secreta
+
+Atrás del castillo, en el eje de la entrada, está la torre del homenaje. Se entra por la puerta **TORRE** del pasillo este de la planta baja: en el vestíbulo hay un ascensor en un hueco de vidrio que sube directo a la cima (y baja solo). Arriba, un recibidor con una puerta lleva a la oficina secreta de ARCHIVUM: mesa larga, sillas, estanterías, escritorio y ventanales sobre la ciudad. Su plano es `buildTop` en `client/src/layout.ts`.
+
+Tiene dos cerraduras, `tower` (el ascensor) y `office` (la puerta de la oficina), cada una con su PIN de 4 dígitos que el admin pone en el panel (**Torre ARCHIVUM**). Sin PIN quedan abiertas para todos. El servidor guarda el PIN con hash y limita los intentos como en las salas, pero estas cerraduras no protegen datos: solo dicen sí o no, así que la oficina no debe guardar piezas privadas. La torre se vuelve a cerrar al salir al pasillo; la oficina, cuando su puerta se cierra contigo en el recibidor.
+
 ## Roles
 
 | Quién | Qué puede hacer |
@@ -54,10 +60,12 @@ Al crear una sala (o después, en el panel) se le puede poner un PIN de 4 dígit
 |---|---|---|
 | POST | `/api/register`, `/api/login` | cualquiera → `{token, user}` |
 | GET | `/api/me` | usuario |
-| GET | `/api/museum` | cualquiera → `{floors, rooms, exhibits}`; las piezas de una sala con PIN solo llegan con su token en `X-Room-Tokens` (o a un curador) |
+| GET | `/api/museum` | cualquiera → `{floors, rooms, exhibits, locks}`; las piezas de una sala con PIN solo llegan con su token en `X-Room-Tokens` (o a un curador); `locks` dice qué cerraduras de la torre tienen PIN |
 | POST | `/api/floors` `{name}`, `/api/rooms` `{floor, title, pin?}` | curador |
 | PUT | `/api/rooms/<id>/pin` `{pin}` (vacío lo quita) | curador |
 | POST | `/api/rooms/<id>/unlock` `{pin}` → `{token}` | cualquiera, 5 intentos por minuto |
+| PUT | `/api/locks/<tower\|office>` `{pin}` (vacío lo quita) | admin |
+| POST | `/api/locks/<tower\|office>/unlock` `{pin}` → 204 | cualquiera, 5 intentos por minuto |
 | POST | `/api/exhibits` (multipart: `room`, `file` o `text`, `caption`) | curador; el tipo y el autor los decide el servidor |
 | DELETE | `/api/exhibits/<id>` | su autor o admin |
 | DELETE | `/api/rooms/<id>`, `/api/floors/<id>` | admin (borra todo lo de adentro) |
