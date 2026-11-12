@@ -125,6 +125,45 @@ export const slate = () => texture(64, 64, (g, rand) => {
   speckle(g, rand, 150, ['#36425a', '#5a6b88'])
 })
 
+// a polished oak floor: long planks in staggered rows, their ends and edges dark
+export const planks = () => texture(64, 64, (g, rand) => {
+  for (let y = 0; y < 64; y += 8) {
+    for (let x = (y / 8) % 2 ? -16 : 0; x < 64; x += 32) {
+      g.fillStyle = pick(rand, ['#8a5a32', '#94633a', '#7e5230', '#9b6b40'])
+      g.fillRect(x, y, 32, 8)
+      g.fillStyle = '#5c3a1f'
+      g.fillRect(x, y + 7, 32, 1)
+      g.fillRect(x + 31, y, 1, 8)
+    }
+  }
+  speckle(g, rand, 300, ['#a87848', '#704826', 'rgba(255,255,255,0.08)'])
+})
+
+// a bookcase: four shelves of books in every color and height, on dark wood
+export const books = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#3a2414'
+  g.fillRect(0, 0, 64, 64)
+  for (let y = 2; y < 64; y += 16) {
+    for (let x = 2; x < 62;) {
+      const w = 2 + Math.floor(rand() * 3), h = 9 + Math.floor(rand() * 4)
+      g.fillStyle = pick(rand, ['#7a1d1d', '#1d3f7a', '#2d6a35', '#c99a1e', '#5a2a6d', '#d8d0c0', '#8a4a1a', '#1c1c1e'])
+      g.fillRect(x, y + 13 - h, w, h)
+      g.fillStyle = 'rgba(255,255,255,0.18)'
+      g.fillRect(x, y + 13 - h, 1, h)
+      x += w + (rand() < 0.1 ? 3 : 0)
+    }
+    g.fillStyle = '#5c3a1f' // the shelf
+    g.fillRect(0, y + 13, 64, 3)
+  }
+})
+
+// leather or cloth in one color, faintly worn
+export const cloth = (color: string) => texture(16, 16, (g, rand) => {
+  g.fillStyle = color
+  g.fillRect(0, 0, 16, 16)
+  speckle(g, rand, 40, ['rgba(255,255,255,0.08)', 'rgba(0,0,0,0.15)'], 0, 0, 16, 16)
+})
+
 // a dark gallery ceiling crossed by two beams, each lit along one edge
 function paintCeiling(g: CanvasRenderingContext2D, rand: Rand) {
   g.fillStyle = '#28282c'

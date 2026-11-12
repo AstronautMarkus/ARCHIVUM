@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { api, errorText, fileUrl, floorColor, FLOOR_COLORS, type Exhibit, type Floor, type Museum, type Room, type User } from './api'
+import { api, errorText, fileUrl, floorColor, FLOOR_COLORS, type Exhibit, type Floor, type Lock, type Museum, type Room, type User } from './api'
 import { AuthForm } from './Auth'
 
 const ACCEPT = 'image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,audio/mpeg,audio/ogg,audio/wav,audio/mp4'
@@ -164,6 +164,24 @@ export function Admin({ museum, user, reload }: { museum: Museum; user: User | n
               <label>Descripción<input name="caption" maxLength={200} /></label>
               <button disabled={!!busy}>Subir</button>
             </form>
+          </section>
+        )}
+        {user.admin && (
+          <section>
+            <h2>Torre ARCHIVUM</h2>
+            {/* without a PIN each lock stays open to every visitor */}
+            {([['tower', 'Ascensor de la torre'], ['office', 'Puerta de la oficina secreta']] as [Lock, string][]).map(([lock, label]) => {
+              const set = museum.locks?.[lock]
+              const save = (pin: string) => run('Guardando…', () => api(`/locks/${lock}`, { method: 'PUT', json: { pin } }))
+              return (
+                <form key={lock} className="row" onSubmit={(e) => { e.preventDefault(); save(String(new FormData(e.currentTarget).get('pin'))); e.currentTarget.reset() }}>
+                  <span style={{ flex: 1 }}>{label} {set ? '🔒' : <small>(abierto)</small>}</span>
+                  <input name="pin" placeholder={set ? 'Nuevo PIN' : 'PIN'} aria-label={`PIN: ${label}`} inputMode="numeric" pattern="\d{4}" maxLength={4} size={9} required />
+                  <button disabled={!!busy}>{set ? 'Cambiar' : 'Poner'}</button>
+                  {set && <button type="button" className="link" disabled={!!busy} onClick={() => save('')}>quitar</button>}
+                </form>
+              )
+            })}
           </section>
         )}
         {user.admin && <Users />}

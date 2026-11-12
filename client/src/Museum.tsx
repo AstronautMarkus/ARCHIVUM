@@ -4,11 +4,11 @@ import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
-  buildBuilding, keepLevel, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TILE, TORII, WALL_H,
+  buildBuilding, buildTop, keepLevel, keepLift, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TABLE, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
-import { fileUrl, floorColor, isUnlocked, lockRoom, type Exhibit, type Floor, type Museum } from './api'
-import { ashlar, cantera, ceiling, checker, hedge, limestone, pennant, railing, slate, spots, whiteBrick } from './textures'
+import { fileUrl, floorColor, isLockOpen, isUnlocked, lockRoom, relock, type Exhibit, type Floor, type Lock, type Museum } from './api'
+import { ashlar, books, cantera, ceiling, checker, cloth, hedge, limestone, pennant, planks, railing, slate, spots, whiteBrick } from './textures'
 import core from './core.json'
 
 const EYE = 1.6
@@ -65,18 +65,21 @@ const TITLE = { color: GOLD, outlineWidth: '8%', outlineColor: '#000' }
 type Props = {
   museum: Museum; floor: number; token: string; quiet: boolean; view: View; fps: RefObject<HTMLElement | null>
   onFloor: (k: number) => void; onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
+  onTower: (where: '' | 'car' | 'top') => void // riding the keep's elevator, or up in its secret office
   onLock: (locked: boolean) => void; onChanged: () => void; onChat: (m: Chat) => void; say: RefObject<(text: string) => void>
   onAct: (a: Act | null) => void
 }
 export type Chat = { id: number; n: string; chat: string }
 
 // the whole building in one scene; `floor` is where you stand, kept in sync both ways with stairs and elevator
-export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, onElevator, onPick, onAct, onLock, onChanged, onChat, say }: Props) {
+export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, onElevator, onTower, onPick, onAct, onLock, onChanged, onChat, say }: Props) {
   const byRoom = Map.groupBy(museum.exhibits, (e) => e.room)
   const floors = museum.floors.map((f: Floor) => museum.rooms.filter((r) => r.floor === f.id)
     .map((r) => ({ id: r.id, title: r.title, locked: r.locked, count: r.count ?? byRoom.get(r.id)?.length ?? 0 })))
   const key = JSON.stringify(floors)
   const layouts = useMemo(() => buildBuilding(floors), [key])
+  const summit = useMemo(() => buildTop(layouts[0]), [layouts]) // the keep's top room, the secret office
+  const lockOpen = (lock: Lock) => isLockOpen(museum, lock)
   // experiment: a painted panorama for the sky; useMemo(makeSky, []) brings back the pixel-art one
   const sky = useMemo(() => loadSky('/sky.jpg', 20), [])
   const fog = useMemo(() => new THREE.Fog('#000', 3, 24), [])
@@ -87,10 +90,12 @@ export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, on
       <primitive key={view} attach="background" object={VIEWS[view].thick ? fog.color : sky} />
       <primitive attach="fog" object={fog} />
       <Suspense fallback={null}>
-        <World layouts={layouts} colors={museum.floors.map(floorColor)} byRoom={byRoom} quiet={quiet} current={floor} view={view} onChanged={onChanged} />
+        <World layouts={layouts} summit={summit} lockOpen={lockOpen} colors={museum.floors.map(floorColor)} byRoom={byRoom} quiet={quiet}
+          current={floor} view={view} onChanged={onChanged} />
         <Avatars floorId={museum.floors[floor]?.id ?? ''} token={token} onChanged={onChanged} onChat={onChat} say={say} />
       </Suspense>
-      <Player layouts={layouts} floor={floor} view={view} onFloor={onFloor} onElevator={onElevator} onPick={onPick} onAct={onAct} />
+      <Player layouts={layouts} summit={summit} lockOpen={lockOpen} floor={floor} view={view} onFloor={onFloor} onElevator={onElevator}
+        onTower={onTower} onPick={onPick} onAct={onAct} />
       <Fps el={fps} />
       <PointerLockControls selector="#lock" onLock={() => onLock(true)} onUnlock={() => onLock(false)} />
     </Canvas>
@@ -217,14 +222,16 @@ const OUTDOOR = 'osgpT' // tiles under the open sky
 
 // The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
 // same draw calls. Exhibits, signs and media, the heavy part, exist only for your floor and the ones next to it.
-function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
-  layouts: Layout[]; colors: string[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number; view: View; onChanged: () => void
+function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view, onChanged }: {
+  layouts: Layout[]; summit: Layout; lockOpen: (lock: Lock) => boolean; colors: string[]; byRoom: Map<string, Exhibit[]>; quiet: boolean
+  current: number; view: View; onChanged: () => void
 }) {
   // the museum is a white gallery with a stone arcade inside a castle of pale ashlar under slate roofs (see
   // textures.ts); Freedoom's art is for the city, the street, the shrine and the elevator
   const [wall, lobby, ceil, spot, stone, iron, leaves, castle, roof] = useMemo(() =>
     [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing(), hedge(), ashlar(), slate()], [])
   const [castleWin, arch, banner, flag] = useMemo(() => [withWindow(castle, true), withWindow(null, true), pennant(16, 48), pennant(32, 20)], [castle])
+  const [oak, shelf, leather, rug] = useMemo(() => [planks(), books(), cloth('#6b1f1f'), pennant(24, 64)], [])
   const palette = colors.join()
   const marble = useMemo(() => colors.map(checker), [palette]) // one floor pattern per storey, in its own color
   const [lite, facade, street, sidewalk, door, grass, cobbles, wood, metal, panel, plate, steel,
@@ -414,7 +421,7 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
       {/* the castle around the museum: a round tower on each corner, the keep at the back, banners down the sides */}
       {ground.turrets?.map((at) => <Turret key={`${at.x},${at.z}`} at={at} height={top + STOREY} tex={{ wall: castleWin, trim: stone, roof, flag }} />)}
       {ground.keep && (
-        <Keep at={ground.keep} level={keepLevel(layouts.length)} above={top} tex={{ wall: castle, win: castleWin, arch, trim: stone, roof, flag }} />
+        <Keep at={ground.keep} level={keepLevel(layouts.length)} above={top} tex={{ wall: castle, arch, trim: stone, roof, flag }} />
       )}
       {t.banners.map((b) => {
         const h = Math.min(4.2, top - PARAPET - 0.7) // from just under the roof, never down to the ground
@@ -459,7 +466,18 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
       )}
       {ground.shrine && <Shrine at={ground.shrine} tex={{ wood, bark, stone: facade, lamp: light }} />}
       <Props props={ground.props} />
-      {LIFTS.map((_, i) => <Elevator key={i} i={i} floors={layouts.length} near={near} tex={{ stone, metal, lamp: lite, panel, plate, steel }} />)}
+      {LIFTS.map((lift, i) => (
+        <Elevator key={i} i={i} lift={lift} stops={layouts.map((_, k) => k)} height={top - PARAPET} glass label="ASCENSOR" near={near}
+          tex={{ stone, metal, lamp: lite, panel, plate, steel }} />
+      ))}
+      {/* the keep's elevator, from the hall at its foot to the office at its top, and the office */}
+      <Elevator i={KEEP_CAR} lift={keepLift(ground)} stops={[0, keepLevel(layouts.length)]} height={keepLevel(layouts.length) * STOREY} glass={false}
+        label="TORRE" near={() => true} tex={{ stone, metal, lamp: lite, panel, plate, steel }} />
+      <Office top={summit} y={keepLevel(layouts.length) * STOREY} open={() => lockOpen('office')}
+        tex={{ floor: oak, ceiling: ceil, lights: spot, wall, metal, books: shelf, wood, leather, rug }} />
+      {ground.keep && (
+        <Text position={[ground.keep.x - TILE - 0.03, 2.85, ground.keep.z]} rotation-y={-Math.PI / 2} fontSize={0.4} {...TITLE}>TORRE</Text>
+      )}
       {layouts.map((layout, k) => near(k) && (
         <group key={k} position-y={k * STOREY}>
           {layout.rooms.map((r) => (
@@ -471,6 +489,7 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
         </group>
       ))}
       <group name="exhibits">
+        {near(0) && <KeepTerminals top={summit} y={keepLevel(layouts.length) * STOREY} locked={(l) => !lockOpen(l)} />}
         {layouts.map((layout, k) => near(k) && layout.rooms.filter((r) => r.locked).map((r) => (
           <PinRoom key={r.id} room={r} y={k * STOREY} tex={metal} onRelock={() => { lockRoom(r.id); onChanged() }} />
         )))}
@@ -538,7 +557,10 @@ function TileSet({ cells, tex, y = 0.005 }: { cells: Cell[]; tex: THREE.Texture;
 // shortcut: each visitor has their own cars, so a friend riding theirs seems to float up the shaft on your screen
 // at: floor it's at (fractional while moving); target: floor it's going to; doors: 0 shut .. 1 open;
 // v: speed in floors per second; still: seconds since it shut its doors or arrived, for the pauses in between
-const cars = LIFTS.map(() => ({ at: 0, target: 0, doors: 0, v: 0, still: 1 }))
+// The courtyard's cars come first, in LIFTS' order, then the keep's, which only stops at the bottom and at the top
+const cars = [...LIFTS, null].map(() => ({ at: 0, target: 0, doors: 0, v: 0, still: 1 }))
+const KEEP_CAR = LIFTS.length
+type Lift = (typeof LIFTS)[number]
 // see-through glass in the painted windows' style (withWindow): a dark frame and cross bars around a blue tint,
 // paler at the top, one pane per tile
 function glassPane() {
@@ -564,8 +586,12 @@ const GLASS = { map: glassPane(), transparent: true, depthWrite: false, side: TH
 
 type LiftTextures = Record<'stone' | 'metal' | 'lamp' | 'panel' | 'plate' | 'steel', THREE.Texture>
 
-function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (k: number) => boolean; tex: LiftTextures }) {
-  const { x0, z, w, door } = LIFTS[i], car = cars[i], cx = x0 + TILE / 2, H = floors * STOREY
+// `stops`: the floors it has doors on; the shaft is `height` tall, all glass in the courtyard (`glass`), or only at
+// its back, up the keep, where stone walls close it in on either side
+function Elevator({ i, lift, stops, height: H, glass, label, near, tex }: {
+  i: number; lift: Lift; stops: number[]; height: number; glass: boolean; label: string; near: (k: number) => boolean; tex: LiftTextures
+}) {
+  const { x0, z, w, door } = lift, car = cars[i], cx = x0 + TILE / 2, floors = Math.round(H / STOREY)
   const leafW = door / 2, panelW = (w - door) / 2 // two leaves fill the opening; the panels beside it hide them open
   const cab = useRef<THREE.Group>(null!)
   const leaves = [useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!), useRef<THREE.Mesh>(null!)]
@@ -580,21 +606,23 @@ function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (
     const d = Number.isInteger(car.at) ? car.at : -1
     if (d !== docked) setDocked(d)
   })
-  // corner posts up the whole shaft and a machine room on top; on every floor a lintel and two panels around the
-  // doors, and closed landing doors wherever the car isn't
+  // a glass shaft has corner posts all the way up and a machine room on top; at every stop a lintel and two panels
+  // around the doors, and closed landing doors wherever the car isn't
   const frame = useMemo(() => [
-    ...[[x0, -1], [x0, 1], [x0 + TILE, -1], [x0 + TILE, 1]].map(([x, s]): Box => [x, H / 2, z + (s * w) / 2, 0.15, H, 0.15]),
-    [cx, H + 0.6, z, TILE + 0.3, 1.2, w + 0.3] as Box,
-    ...Array.from({ length: floors }, (_, k): Box[] => [
+    ...(glass ? [
+      ...[[x0, -1], [x0, 1], [x0 + TILE, -1], [x0 + TILE, 1]].map(([x, s]): Box => [x, H / 2, z + (s * w) / 2, 0.15, H, 0.15]),
+      [cx, H + 0.6, z, TILE + 0.3, 1.2, w + 0.3] as Box,
+    ] : []),
+    ...stops.flatMap((k): Box[] => [
       [x0, k * STOREY + (DOOR_H + STOREY) / 2, z, 0.2, STOREY - DOOR_H, w],
       ...[-1, 1].map((s): Box => [x0, k * STOREY + DOOR_H / 2, z + (s * (door + panelW)) / 2, 0.2, DOOR_H, panelW]),
-    ]).flat(),
-  ], [floors, H, x0, cx, z, w, door, panelW])
+    ]),
+  ], [glass, stops, H, x0, cx, z, w, door, panelW])
   const landings = useMemo(() => {
     const leaf = (k: number, s: number): Box => [x0 + 0.02, k * STOREY + DOOR_H / 2, z + (s * leafW) / 2, 0.06, DOOR_H, leafW]
-    const shut = Array.from({ length: floors }, (_, k) => k).filter((k) => k !== docked)
+    const shut = stops.filter((k) => k !== docked)
     return { left: shut.map((k) => leaf(k, -1)), right: shut.map((k) => leaf(k, 1)) }
-  }, [floors, docked, x0, z, leafW])
+  }, [stops, docked, x0, z, leafW])
   // the right leaf shows the door picture flipped, so the pair meets in the middle like real elevator doors
   const leaf = useTiled(tex.metal), flipped = useTiled(tex.metal, -1)
   const wallTex = useTiled(tex.panel, 2), frontTex = useTiled(tex.plate), floorTex = useTiled(tex.steel, 1, 2)
@@ -614,7 +642,7 @@ function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (
       <mesh position={[cx, 0.01, z]}><boxGeometry args={[TILE, 0.02, w]} /><meshBasicMaterial map={pitTex} color="#8a8a8a" /></mesh>
       <Boxes boxes={landings.left} tex={tex.metal} />
       <Boxes boxes={landings.right} tex={tex.metal} repeat={[-1, 1]} />
-      {[[cx, z - w / 2, 0, TILE], [cx, z + w / 2, 0, TILE], [x0 + TILE, z, Math.PI / 2, w]].map(([x, zz, r, width], i) => (
+      {[[cx, z - w / 2, 0, TILE], [cx, z + w / 2, 0, TILE], [x0 + TILE, z, Math.PI / 2, w]].map(([x, zz, r, width], i) => (glass || i === 2) && (
         <mesh key={i} position={[x, H / 2, zz]} rotation-y={r}>
           <planeGeometry args={[width, H]} />
           <meshBasicMaterial {...GLASS} map={i < 2 ? shaftSide : shaftBack} />
@@ -649,9 +677,9 @@ function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (
         {leafMesh(2, x0 + 0.02)}
         {leafMesh(3, x0 + 0.02)}
       </group>
-      {Array.from({ length: floors }, (_, k) => near(k) && (
+      {stops.map((k) => near(k) && (
         <Text key={k} position={[x0 - 0.12, k * STOREY + 2.85, z]} rotation-y={-Math.PI / 2} fontSize={0.3} {...TITLE}>
-          ASCENSOR
+          {label}
         </Text>
       ))}
     </>
@@ -677,13 +705,14 @@ function Boxes({ boxes, tex, repeat = [1, 1], cut = false }: { boxes: Box[]; tex
   )
 }
 
-// window glass, placed and sized like Boxes but flat, across x (their x size is ignored)
+// window glass, placed and sized like Boxes but flat: along z, or along x when it has an x size (and no z size)
 function Panes({ panes }: { panes: Box[] }) {
   const ref = useRef<THREE.InstancedMesh>(null!)
   const geometry = useMemo(() => new THREE.PlaneGeometry().rotateY(Math.PI / 2), [])
   useLayoutEffect(() => {
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), at = new THREE.Vector3(), size = new THREE.Vector3()
-    panes.forEach(([x, y, z, , sy, sz], i) => ref.current.setMatrixAt(i, m.compose(at.set(x, y, z), q, size.set(1, sy, sz))))
+    const turned = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2)
+    panes.forEach(([x, y, z, sx, sy, sz], i) => ref.current.setMatrixAt(i, m.compose(at.set(x, y, z), sx ? turned : q, size.set(1, sy, sx || sz))))
     ref.current.instanceMatrix.needsUpdate = true
     ref.current.computeBoundingSphere()
   }, [panes])
@@ -904,60 +933,194 @@ function Turret({ at, height, tex }: { at: { x: number; z: number }; height: num
 }
 
 // The keep: the castle's tall tower at the back, on the entrance axis, `level` storeys up. A plain stone shaft with
-// an arched window every other storey on each side (on the west one only over the building's roof, `above`); at
-// the top a gallery on corbels with battlements runs round a room windowed all round, under a tall slate roof
-// with a pennant, and a little turret hangs off each corner of the gallery
+// an arched window every other storey on its sides (on the west only over the building's roof, `above`); its last
+// column is the elevator's, glazed at the back so you see out riding up. At its foot, a hall; at the top, a room a
+// tile wider all round on a ring of corbels, windowed all round, ARCHIVUM's secret office (Office draws inside it),
+// its roof walled in by battlements with a little turret on each corner, and a tall slate roof with a pennant
 function Keep({ at, level, above, tex }: {
-  at: NonNullable<Layout['keep']>; level: number; above: number; tex: Record<'wall' | 'win' | 'arch' | 'trim' | 'roof' | 'flag', THREE.Texture>
+  at: NonNullable<Layout['keep']>; level: number; above: number; tex: Record<'wall' | 'arch' | 'trim' | 'roof' | 'flag', THREE.Texture>
 }) {
-  const { x, z, w, d } = at, H = level * STOREY, cx = x + d / 2, [n, s] = [z - w / 2, z + w / 2], g = 0.6 // gallery overhang
-  const across = useTiled(tex.wall, w / TILE, H / TILE), along = useTiled(tex.wall, d / TILE, H / TILE) // faces ±x, ±z
-  const roomAcross = useTiled(tex.win, w / TILE), roomAlong = useTiled(tex.win, d / TILE)
+  const { x, z, w, d } = at, H = level * STOREY, [n, s] = [z - w / 2, z + w / 2]
+  const body = d - TILE, bx = x + body / 2, cx = x + d / 2, top = H + STOREY // the stone part, west of the elevator's column
+  const across = useTiled(tex.wall, (w - 2 * TILE) / TILE, (H - STOREY) / TILE), along = useTiled(tex.wall, body / TILE, (H - STOREY) / TILE)
   const parts = useMemo(() => {
     const windows: Box[] = [], corbels: Box[] = []
     for (let k = 1; k < level; k += 2) {
       const y = (k + 0.5) * STOREY
-      windows.push([cx, y, n - 0.03, TILE, STOREY, 0.04], [cx, y, s + 0.03, TILE, STOREY, 0.04])
-      for (const dz of [-TILE, TILE]) {
-        windows.push([x + d + 0.03, y, z + dz, 0.04, STOREY, TILE])
-        if (y - STOREY / 2 > above) windows.push([x - 0.03, y, z + dz, 0.04, STOREY, TILE])
+      windows.push([bx, y, n - 0.03, TILE, STOREY, 0.04], [bx, y, s + 0.03, TILE, STOREY, 0.04])
+      if (y - STOREY / 2 > above) for (const dz of [-TILE, TILE]) windows.push([x - 0.03, y, z + dz, 0.04, STOREY, TILE])
+    }
+    // the room on top: a tile out past the keep all round
+    const [x0, x1, z0, z1] = [x - TILE, x + d + TILE, n - TILE, s + TILE], rx = (x0 + x1) / 2
+    for (let i = 0.5; i < x1 - x0; i++) corbels.push([x0 + i, H - 0.9, z0 + 0.3, 0.35, 0.6, 0.6], [x0 + i, H - 0.9, z1 - 0.3, 0.35, 0.6, 0.6])
+    for (let i = 0.5; i < z1 - z0; i++) corbels.push([x0 + 0.3, H - 0.9, z0 + i, 0.6, 0.6, 0.35], [x1 - 0.3, H - 0.9, z0 + i, 0.6, 0.6, 0.35])
+    // its outer walls: a sill and a lintel on every tile, a pier at every corner of a tile, glass between; but solid
+    // behind the elevator, where its machinery is
+    const walls: Box[] = [], panes: Box[] = [], t = 0.3
+    const sill = 0.9, head = 2.6 // the glass, from just over a table to just under the ceiling
+    for (let tx = x0; tx < x1 - 0.1; tx += TILE) {
+      for (const zz of [z0, z1]) {
+        walls.push([tx + TILE / 2, H + sill / 2, zz, TILE, sill, t], [tx + TILE / 2, (H + head + top) / 2, zz, TILE, top - H - head, t], [tx, H + STOREY / 2, zz, 0.3, STOREY, t + 0.05])
+        panes.push([tx + TILE / 2, H + (sill + head) / 2, zz, TILE, head - sill, 0])
       }
     }
-    for (let i = 0.5; i < d; i++) corbels.push([x + i, H - 0.95, n - 0.3, 0.3, 0.5, 0.6], [x + i, H - 0.95, s + 0.3, 0.3, 0.5, 0.6])
-    for (let i = 0.5; i < w; i++) corbels.push([x - 0.3, H - 0.95, n + i, 0.6, 0.5, 0.3], [x + d + 0.3, H - 0.95, n + i, 0.6, 0.5, 0.3])
-    const [x0, x1, z0, z1] = [x - g, x + d + g, n - g, s + g]
-    const wall: Box[] = [ // the gallery's low wall, and its merlons on top
-      [cx, H + 0.3, z0 + 0.12, x1 - x0, 0.6, 0.24], [cx, H + 0.3, z1 - 0.12, x1 - x0, 0.6, 0.24],
-      [x0 + 0.12, H + 0.3, z, 0.24, 0.6, z1 - z0], [x1 - 0.12, H + 0.3, z, 0.24, 0.6, z1 - z0],
-      ...battlements(x0, x1, z0, z1, H + 0.6, 0.24),
+    for (let tz = z0; tz < z1 - 0.1; tz += TILE) {
+      for (const xx of [x0, x1]) {
+        if (xx === x1 && tz >= n + TILE - 0.1 && tz < s - TILE - 0.1) { walls.push([xx, H + STOREY / 2, tz + TILE / 2, t, STOREY, TILE]); continue }
+        walls.push([xx, H + sill / 2, tz + TILE / 2, t, sill, TILE], [xx, (H + head + top) / 2, tz + TILE / 2, t, top - H - head, TILE], [xx, H + STOREY / 2, tz, t + 0.05, STOREY, 0.3])
+        panes.push([xx, H + (sill + head) / 2, tz + TILE / 2, 0, head - sill, TILE])
+      }
+    }
+    walls.push([x1, H + STOREY / 2, z1, t + 0.05, STOREY, 0.3], [x1, H + STOREY / 2, z0, t + 0.05, STOREY, 0.3])
+    // on its roof, battlements: a low wall all round and merlons on it
+    const crown: Box[] = [
+      [rx, top + 0.45, z0 + 0.12, x1 - x0, 0.6, 0.24], [rx, top + 0.45, z1 - 0.12, x1 - x0, 0.6, 0.24],
+      [x0 + 0.12, top + 0.45, z, 0.24, 0.6, z1 - z0], [x1 - 0.12, top + 0.45, z, 0.24, 0.6, z1 - z0],
+      ...battlements(x0, x1, z0, z1, top + 0.75, 0.24),
     ]
-    const trim: Box[] = [[cx, H - 0.35, z, x1 - x0, 0.7, z1 - z0], [cx, H + STOREY + 0.15, z, d + 0.8, 0.3, w + 0.8], ...corbels]
-    return { windows, wall, trim, corners: [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] }
-  }, [x, z, w, d, n, s, cx, H, level, above])
+    // the room's floor slab, open over the elevator's shaft so the car comes up through it
+    const [sx0, sx1, sz0, sz1, e] = [x + d - TILE, x + d, n + TILE, s - TILE, 0.15]
+    const slab = (a: number, b: number, c: number, f: number): Box => [(a + b) / 2, H - 0.3, (c + f) / 2, b - a, 0.6, f - c]
+    const trim: Box[] = [
+      slab(x0 - e, sx0, z0 - e, z1 + e), slab(sx1, x1 + e, z0 - e, z1 + e), slab(sx0, sx1, z0 - e, sz0), slab(sx0, sx1, sz1, z1 + e),
+      [rx, top + 0.075, z, x1 - x0 + 0.3, 0.15, z1 - z0 + 0.3], ...corbels,
+    ]
+    // the stone either side of the hall all the way up, and either side of the elevator's shaft
+    const sides: Box[] = [[bx, H / 2, n + TILE / 2, body, H, TILE], [bx, H / 2, s - TILE / 2, body, H, TILE]]
+    const piers: Box[] = [[x + d - TILE / 2, H / 2, n + TILE / 2, TILE, H, TILE], [x + d - TILE / 2, H / 2, s - TILE / 2, TILE, H, TILE]]
+    return { windows, walls, panes, crown, trim, sides, piers, corners: [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] }
+  }, [x, z, w, d, n, s, bx, H, top, level, above])
   return (
     <>
-      <mesh position={[cx, H / 2, z]}>
-        <boxGeometry args={[d, H, w]} />
+      {/* the stone over the hall, up to the top room */}
+      <mesh position={[bx, (H + STOREY) / 2, z]}>
+        <boxGeometry args={[body, H - STOREY, w - 2 * TILE]} />
         {[across, across, along, along, along, along].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
       </mesh>
+      <Boxes boxes={parts.sides} tex={tex.wall} repeat={[body / TILE, H / TILE]} />
+      <Boxes boxes={parts.piers} tex={tex.wall} repeat={[1, H / TILE]} />
       <Boxes boxes={parts.windows} tex={tex.arch} cut />
       <Boxes boxes={parts.trim} tex={tex.trim} />
-      <Boxes boxes={parts.wall} tex={tex.wall} repeat={[0.5, 0.3]} />
-      <mesh position={[cx, H + STOREY / 2, z]}>
-        <boxGeometry args={[d, STOREY, w]} />
-        {[roomAcross, roomAcross, roomAlong, roomAlong, roomAlong, roomAlong].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
-      </mesh>
+      <Boxes boxes={parts.walls} tex={tex.wall} repeat={[1, 0.5]} />
+      <Panes panes={parts.panes} />
+      <Boxes boxes={parts.crown} tex={tex.wall} repeat={[0.5, 0.3]} />
       <group position={[cx, 0, z]}>
-        <Spire y={H + STOREY + 0.3} r={1} h={10} n={4} scale={[(d + 1) / Math.SQRT2, (w + 1) / Math.SQRT2]} tex={tex.roof} />
-        <group position-y={H + STOREY + 9.6} scale={0.6}><Flag at={{ x: 0, z: 0 }} tex={tex.flag} /></group>
+        <Spire y={top + 0.15} r={1} h={10} n={4} scale={[(d + 0.6) / Math.SQRT2, (w + 0.6) / Math.SQRT2]} tex={tex.roof} />
+        <group position-y={top + 9.5} scale={0.6}><Flag at={{ x: 0, z: 0 }} tex={tex.flag} /></group>
       </group>
-      {parts.corners.map(([bx, bz]) => (
-        <group key={`${bx},${bz}`} position={[bx, H, bz]}>
+      {parts.corners.map(([cx0, cz0]) => (
+        <group key={`${cx0},${cz0}`} position={[cx0, top, cz0]}>
           <mesh position-y={-0.6} rotation-x={Math.PI}><coneGeometry args={[0.8, 1.2, 10]} /><meshBasicMaterial map={tex.trim} /></mesh>
           <mesh position-y={1.2}><cylinderGeometry args={[0.8, 0.8, 2.4, 10, 1, true]} /><meshBasicMaterial map={tex.wall} /></mesh>
           <Spire y={2.4} r={1.05} h={2.6} n={10} tex={tex.roof} />
         </group>
       ))}
+    </>
+  )
+}
+
+// ARCHIVUM's secret office, the keep's top room (`top`, its floor at y): an oak floor, the long table and its chairs
+// on a rug with the museum's A, bookcases on the elevator lobby's outer walls, a desk with a terminal in one wing and
+// a globe in the other. The lobby is walled off but for the office's door, which slides up as you come to it while
+// its lock is open (`open`), and once it has shut behind you in the lobby locks again
+function Office({ top, y, open, tex }: {
+  top: Layout; y: number; open: () => boolean; tex: Record<'floor' | 'ceiling' | 'lights' | 'wall' | 'metal' | 'books' | 'wood' | 'leather' | 'rug', THREE.Texture>
+}) {
+  const lift = keepLift(top), office = top.office!, lx = office.x, [n, s] = [lift.z - lift.w / 2, lift.z + lift.w / 2]
+  const back = lift.x0 + 2 * TILE, jamb = (lift.w - office.w) / 2, [tx, tz] = office.table
+  const cells = useMemo(() => top.rows.flatMap((row, i) => [...row].flatMap((c, j): Cell[] => (c === '.' ? [[j + top.x0, i + top.z0, y]] : []))), [top, y])
+  const [lit, dim] = useMemo(() => [cells.filter(([a, b]) => (a + b) % 2 === 0), cells.filter(([a, b]) => (a + b) % 2 !== 0)], [cells])
+  const parts = useMemo(() => {
+    const h = STOREY
+    const walls: Box[] = [ // the lobby's sides run on past the shaft, just outside it, clear of the car's own walls
+      [(lx + back) / 2, y + h / 2, n - 0.1, back - lx + 0.2, h, 0.2], [(lx + back) / 2, y + h / 2, s + 0.1, back - lx + 0.2, h, 0.2],
+      [lx, y + h / 2, n + jamb / 2, 0.2, h, jamb], [lx, y + h / 2, s - jamb / 2, 0.2, h, jamb],
+      [lx, y + (DOOR_H + h) / 2, lift.z, 0.2, h - DOOR_H, office.w],
+    ]
+    const wood: Box[] = [ // the table's top and trestles, the desk
+      [tx, y + TABLE.h - 0.03, tz, TABLE.w, 0.06, TABLE.l],
+      ...[-1, 1].map((e): Box => [tx, y + (TABLE.h - 0.06) / 2, tz + e * (TABLE.l / 2 - 0.6), TABLE.w - 0.3, TABLE.h - 0.06, 0.12]),
+      [office.desk[0], y + 0.38, office.desk[1], office.desk[2], 0.76, office.desk[3]],
+    ]
+    const seats: Box[] = [], frames: Box[] = []
+    for (const { x: cx, z: cz, back: [bx, bz] } of office.chairs) {
+      seats.push([cx, y + 0.47, cz, 0.5, 0.1, 0.5], [cx + bx * 0.25, y + 0.85, cz + bz * 0.25, bx ? 0.1 : 0.5, 0.7, bz ? 0.1 : 0.5])
+      frames.push([cx, y + 0.21, cz, 0.36, 0.42, 0.36])
+    }
+    const shelves = office.shelves.map(([x, z, sx, sz]): Box => [x, y + 1.2, z, sx, 2.4, sz])
+    return { walls, wood, seats, frames, shelves, machinery: [[lift.x0 + 1.5 * TILE, y + h / 2, lift.z, TILE, h, lift.w]] as Box[] }
+  }, [y, lx, back, n, s, jamb, lift, office, tx, tz])
+  const door = useRef<THREE.Mesh>(null!)
+  const sound = useMemo(() => ({ open: new Audio('/doom/dsdoropn.wav'), close: new Audio('/doom/dsdorcls.wav') }), [])
+  useFrame(({ camera: { position: p } }, dt) => {
+    dt = Math.min(dt, 0.1)
+    const d = roomDoor('office'), here = Math.abs(p.y - (y + EYE)) < 1.5
+    const near = here && Math.abs(p.x - lx) < 1.6 && Math.abs(p.z - office.z) < office.w / 2 + 0.6
+    if (d.want) {
+      d.t = near ? 1.5 : d.t - dt
+      if (d.t <= 0) d.want = false
+    }
+    const before = d.open, wanted = d.want || (near && open())
+    d.open = THREE.MathUtils.clamp(d.open + (wanted ? 2 : -2) * dt, 0, 1)
+    if (wanted ? before === 0 && d.open > 0 : before === 1 && d.open < 1) { // it just began to open or to shut
+      const a = wanted ? sound.open : sound.close
+      a.currentTime = 0
+      a.volume = here ? 0.6 : 0
+      a.play().catch(() => {}) // blocked until the first click
+    }
+    door.current.position.y = y + DOOR_H / 2 + d.open * (DOOR_H + 0.02)
+    if (!wanted && d.open === 0 && (!here || p.x > lx)) relock('office') // shut behind you, out in the lobby
+  })
+  return (
+    <>
+      <TileSet cells={cells} tex={tex.floor} />
+      <TileSet cells={lit} tex={tex.lights} y={WALL_H - 0.005} />
+      <TileSet cells={dim} tex={tex.ceiling} y={WALL_H - 0.005} />
+      <Boxes boxes={parts.walls} tex={tex.wall} repeat={[1, STOREY / TILE]} />
+      <Boxes boxes={parts.machinery} tex={tex.metal} />
+      <Boxes boxes={parts.wood} tex={tex.wood} />
+      <Boxes boxes={parts.seats} tex={tex.leather} />
+      <Boxes boxes={parts.frames} tex={tex.wood} />
+      <Boxes boxes={parts.shelves} tex={tex.books} repeat={[(back - lx - 0.6) / TILE, 1]} />
+      <mesh ref={door} position={[lx, y + DOOR_H / 2, office.z]}>
+        <boxGeometry args={[0.12, DOOR_H, office.w]} />
+        <meshBasicMaterial map={tex.metal} />
+      </mesh>
+      <mesh position={[tx, y + 0.012, tz]} rotation-x={-Math.PI / 2}>
+        <planeGeometry args={[TABLE.w + 2, TABLE.l + 2.4]} />
+        <meshBasicMaterial map={tex.rug} />
+      </mesh>
+      {/* the desk's terminal, and the globe */}
+      <group position={[office.desk[0], y + 0.76, office.desk[1]]}>
+        <mesh position={[0.15, 0.3, 0]}><boxGeometry args={[0.12, 0.45, 0.7]} /><meshBasicMaterial color="#1c211c" /></mesh>
+        <mesh position={[0.08, 0.3, 0]} rotation-y={-Math.PI / 2}><planeGeometry args={[0.6, 0.36]} /><meshBasicMaterial color="#8cff6b" /></mesh>
+        <Text position={[0.07, 0.3, 0]} rotation-y={-Math.PI / 2} fontSize={0.07} color="#0a2a0a">ARCHIVUM OS</Text>
+      </group>
+      <group position={[office.globe[0], y, office.globe[1]]}>
+        <mesh position-y={0.45}><cylinderGeometry args={[0.04, 0.2, 0.9, 8]} /><meshBasicMaterial map={tex.wood} /></mesh>
+        <mesh position-y={1.2}><sphereGeometry args={[0.35, 12, 8]} /><meshBasicMaterial color="#2d5f9a" /></mesh>
+        <mesh position-y={1.2} rotation-z={0.4}><torusGeometry args={[0.4, 0.02, 4, 16]} /><meshBasicMaterial color={GILT} /></mesh>
+      </group>
+      <Text position={[lx - 0.12, y + 2.9, office.z]} rotation-y={-Math.PI / 2} fontSize={0.45} {...TITLE}>ARCHIVUM</Text>
+      <Text position={[lx + 0.12, y + 2.85, office.z]} rotation-y={Math.PI / 2} fontSize={0.2} {...TITLE}>OFICINA SECRETA</Text>
+    </>
+  )
+}
+
+// the keypads of the keep's locks, only on the locks that have a PIN: the elevator's in the hall at its foot, the
+// office's in the lobby at the top, beside its door
+function KeepTerminals({ top, y, locked }: { top: Layout; y: number; locked: (lock: Lock) => boolean }) {
+  const lift = keepLift(top), office = top.office!, jamb = (lift.w - office.w) / 2
+  return (
+    <>
+      {locked('tower') && (
+        <Terminal x={lift.x0 - 0.6} z={lift.z - lift.w / 2 + 0.06} rot={0} act={{ kind: 'lock', room: 'tower', title: 'Torre ARCHIVUM' }} label="PIN" />
+      )}
+      {locked('office') && (
+        <group position-y={y}>
+          <Terminal x={office.x + 0.16} z={lift.z - lift.w / 2 + jamb / 2} rot={Math.PI / 2} act={{ kind: 'lock', room: 'office', title: 'Oficina ARCHIVUM' }} label="PIN" />
+        </group>
+      )}
     </>
   )
 }
@@ -1008,7 +1171,7 @@ function FrontDoor({ at, tex }: { at: NonNullable<Layout['door']>; tex: THREE.Te
 // ---- PIN rooms ----
 
 // what you point at that you can press: a PIN room's keypad outside, or the exit button inside
-export type Act = { kind: 'pin' | 'exit'; room: string; title: string }
+export type Act = { kind: 'pin' | 'exit' | 'lock'; room: string; title: string } // lock: one of the keep's, `room` its name
 // each PIN room's door: 0 shut .. 1 open; `want` it open for another `t` seconds. It opens when the PIN is right (or
 // from the exit button inside), stays while you're in the doorway, and shuts a moment after you've gone through
 const roomDoors = new Map<string, { open: number; want: boolean; t: number }>()
@@ -1355,16 +1518,16 @@ const CENTER = new THREE.Vector2(0, 0)
 const R = 0.2 // body radius: small, so you can walk right up to walls and what hangs on them
 const HEAD = 0.15 // how far the top of your head is above your eyes
 
-function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
-  layouts: Layout[]; floor: number; view: View; onFloor: (k: number) => void
-  onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void; onAct: (a: Act | null) => void
+function Player({ layouts, summit, lockOpen, floor, view, onFloor, onElevator, onTower, onPick, onAct }: {
+  layouts: Layout[]; summit: Layout; lockOpen: (lock: Lock) => boolean; floor: number; view: View; onFloor: (k: number) => void
+  onElevator: (on: boolean) => void; onTower: Props['onTower']; onPick: (ex: Exhibit | null) => void; onAct: (a: Act | null) => void
 }) {
   const { camera, scene } = useThree()
   const haze = useMemo(() => new THREE.Color(VIEWS[view].haze), [view])
   const keys = useRef<Record<string, boolean>>({})
   const jumpQueued = useRef(false)
   const verticalSpeed = useRef(0)
-  const last = useRef<{ elevator?: boolean; pick?: Exhibit | null; act?: Act | null }>({})
+  const last = useRef<{ elevator?: boolean; tower?: string; pick?: Exhibit | null; act?: Act | null; riding?: number }>({})
   const ray = useMemo(() => new THREE.Raycaster(undefined, undefined, 0, 4), [])
   const dir = useMemo(() => new THREE.Vector3(), [])
 
@@ -1373,12 +1536,26 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
   // street; anything else that moves you between floors drops you in that floor's lobby.
   const fl = useRef(floor)
   const arrived = useRef(false)
-  const inCar = () => liftShaft(camera.position.x, camera.position.z) // which car you're in, -1 for none
+  // The keep's top room is a level of its own, K storeys up (fl is K there, though `floor` stays the ground floor's);
+  // its elevator is the last car, and only goes between its foot and the top: get in and it takes you to the other
+  // end, a moment after. Downstairs it only comes once you've typed its PIN, if it has one, until you're back out in
+  // the corridor
+  const K = keepLevel(layouts.length), lifts = useMemo(() => [...LIFTS, keepLift(layouts[0])], [layouts])
+  const level = (k: number) => (k === K ? summit : layouts[k])
+  const keep = (x: number, z: number, dx: number) => {
+    const s = lifts[KEEP_CAR], tz = Math.floor(z / TILE)
+    return Math.floor(x / TILE) === s.tx + dx && tz >= s.tz0 && tz <= s.tz1
+  }
+  // which car's shaft (x, z) is in, and which car's doors it's right in front of; -1 for none
+  const shaftAt = (x: number, z: number) => { const i = liftShaft(x, z); return i >= 0 ? i : keep(x, z, 0) ? KEEP_CAR : -1 }
+  const doorAt = (x: number, z: number) => { const i = liftDoor(x, z); return i >= 0 ? i : keep(x, z, -1) ? KEEP_CAR : -1 }
+  const inCar = () => shaftAt(camera.position.x, camera.position.z) // which car you're in, -1 for none
+  const departs = useRef(0) // seconds until the keep's car leaves with you in it; 0 once it has
   // elevator sounds from Freedoom, louder the closer you are to the car
   const sound = useMemo(() => Object.fromEntries(['dsbdopn', 'dsbdcls', 'dspstart', 'dspstop', 'dsswtchn']
     .map((name) => [name, new Audio(`/doom/${name}.wav`)])), [])
   const play = (name: string, i: number) => {
-    const p = camera.position, d = Math.hypot(p.x - LIFTS[i].x0 - TILE / 2, p.y - cars[i].at * WALL_H - EYE, p.z - LIFTS[i].z)
+    const p = camera.position, d = Math.hypot(p.x - lifts[i].x0 - TILE / 2, p.y - cars[i].at * WALL_H - EYE, p.z - lifts[i].z)
     const a = sound[name], volume = Math.min(1, Math.max(0, 1 - d / 20)) * 0.7
     if (volume === 0) return
     a.currentTime = 0
@@ -1386,9 +1563,9 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     a.play().catch(() => {}) // blocked until the first click
   }
   // which way each car's doors went and whether it moved, last frame
-  const was = useRef(LIFTS.map(() => ({ doors: 0, moving: false })))
+  const was = useRef(cars.map(() => ({ doors: 0, moving: false })))
   const spawn = (k: number) => {
-    const s = arrived.current ? SPAWN : layouts[0].start
+    const s = !arrived.current ? layouts[0].start : k === K ? summit.start : SPAWN
     arrived.current = true
     fl.current = k
     camera.position.set(s.x, k * WALL_H + EYE, s.z)
@@ -1401,7 +1578,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     else if (floor !== fl.current) {
       // a button in the car: it goes there, and the HUD keeps showing the floor you're actually on
       const i = inCar()
-      if (i >= 0) { cars[i].target = floor; play('dsswtchn', i); onFloor(fl.current) }
+      if (i >= 0 && i !== KEEP_CAR) { cars[i].target = floor; play('dsswtchn', i); onFloor(fl.current) }
       else spawn(floor)
     }
   }, [floor])
@@ -1424,7 +1601,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
   useFrame((_, dt) => {
     const k = keys.current, p = camera.position
     dt = Math.min(dt, 0.1)
-    if (fl.current >= layouts.length) return spawn(layouts.length - 1) // floors were deleted under us
+    if (fl.current >= layouts.length && fl.current !== K) return spawn(layouts.length - 1) // floors were deleted or added under us
     const turn = (k.ArrowLeft ? 1 : 0) - (k.ArrowRight ? 1 : 0)
     if (turn) camera.rotateOnWorldAxis(UP, turn * 2.5 * dt)
 
@@ -1435,13 +1612,23 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     const side = (k.KeyD ? 1 : 0) - (k.KeyA ? 1 : 0)
     const step = (k.ShiftLeft || k.ShiftRight ? 8 : 4) * dt
     const magnitude = Math.hypot(fwd, side) || 1
-    const here = fl.current, l = layouts[here], riding = inCar(), calling = riding < 0 ? liftDoor(p.x, p.z) : -1
+    const here = fl.current, l = level(here), riding = inCar(), calling = riding < 0 ? doorAt(p.x, p.z) : -1
+    if (riding === KEEP_CAR && last.current.riding !== KEEP_CAR) departs.current = 1.2 // just got in
+    last.current.riding = riding
+    if (here === 0 && layouts[0].keep && p.x < layouts[0].keep.x - TILE) relock('tower') // back out in the corridor
     // each car, like a real one: standing at its door calls it to your floor. To go anywhere it shuts its doors,
     // waits a beat, speeds up gently, slows down as it gets close, stops, waits a beat, and only then opens its
     // doors (while you're at them or inside)
     cars.forEach((car, i) => {
-      car.target = Math.min(car.target, layouts.length - 1)
-      if (calling === i) car.target = here
+      const tower = i === KEEP_CAR, answers = !tower || here === K || lockOpen('tower')
+      if (!tower) car.target = Math.min(car.target, layouts.length - 1)
+      else if (car.target) car.target = K // the top moves up with more floors
+      if (calling === i && answers) car.target = here
+      if (tower && riding === i && departs.current > 0 && car.at === car.target && (departs.current -= dt) <= 0) {
+        departs.current = 0
+        car.target = car.at ? 0 : K
+        play('dsswtchn', i)
+      }
       const before = { doors: car.doors, at: car.at }
       car.still += dt
       if (car.at !== car.target) {
@@ -1455,7 +1642,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
           else car.at += Math.sign(d) * car.v * dt
         }
       } else if (car.still > 0.5) {
-        const wanted = riding === i || (car.at === here && Math.hypot(p.x - LIFTS[i].x0, p.z - LIFTS[i].z) < 3)
+        const wanted = riding === i || (car.at === here && answers && Math.hypot(p.x - lifts[i].x0, p.z - lifts[i].z) < 3)
         car.doors = THREE.MathUtils.clamp(car.doors + (wanted ? 1.5 : -1.5) * dt, 0, 1)
       }
       const doors = Math.sign(car.doors - before.doors), moving = car.at !== before.at
@@ -1467,13 +1654,20 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     // what stops you: walls, desk, fountain, the shafts of columns; the front door until it's mostly up; and the
     // cars, which you only get in or out of through their doorway once the doors are open, from the tile in front
     const open = (x: number, z: number) => {
-      const shaft = liftShaft(x, z)
+      const shaft = shaftAt(x, z)
       if (shaft !== riding) {
         const i = Math.max(shaft, riding), car = cars[i], [ox, oz] = shaft >= 0 ? [p.x, p.z] : [x, z]
-        return Math.min(shaft, riding) < 0 && car.at === here && car.doors >= 0.9 && liftDoor(ox, oz) === i &&
-          Math.abs(z - LIFTS[i].z) < LIFTS[i].door / 2
+        return Math.min(shaft, riding) < 0 && car.at === here && car.doors >= 0.9 && doorAt(ox, oz) === i &&
+          Math.abs(z - lifts[i].z) < lifts[i].door / 2
       }
-      if (shaft >= 0) return true
+      if (shaft >= 0) {
+        // inside the car you keep clear of its walls, its glass and its shut doors, so the camera never looks through
+        // them; out to the doorway only while the doors are open
+        const s = lifts[shaft], doorway = Math.abs(z - s.z) < s.door / 2
+        const front = !doorway ? s.x0 + 0.21 : cars[shaft].doors >= 0.9 ? -Infinity : s.x0 + 0.17
+        return x > front && x < s.x0 + TILE - 0.1 && Math.abs(z - s.z) < s.w / 2 - 0.1
+      }
+      if (l.office && Math.abs(x - l.office.x) < 0.15 && Math.abs(z - l.office.z) < l.office.w / 2 && roomDoor('office').open < 0.8) return false
       if (l.door && Math.abs(x - l.door.x) < TILE / 2 && tileAt(l, x, z) === 'D' && frontDoor.open < 0.8) return false
       if (blockedByRoomDoor(l, x, z)) return false
       return !solidAt(l, x, z)
@@ -1506,10 +1700,12 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
     walk('x', nx - p.x)
     walk('z', nz - p.z)
 
-    // riding, you go wherever the car goes and the floor counts up as you pass them
+    // riding, you go wherever the car goes and the floor counts up as you pass them; the keep's car goes past the
+    // museum's floors without stopping, and you're on its top level once it gets there
     if (riding >= 0) {
       const car = cars[riding], passing = Math.round(car.at)
-      if (passing !== here) onFloor((fl.current = passing))
+      if (riding === KEEP_CAR) { if (car.at === car.target) fl.current = car.at }
+      else if (passing !== here) onFloor((fl.current = passing))
       p.y = car.at * WALL_H + EYE
       verticalSpeed.current = 0
       jumpQueued.current = false
@@ -1530,16 +1726,18 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
         verticalSpeed.current = 0
       }
     }
-    const f = fl.current
-    const at = (x: number, z: number) => tileAt(layouts[f], x, z)
-    const elevator = inCar() >= 0
+    const f = fl.current, car = inCar()
+    const at = (x: number, z: number) => tileAt(level(f), x, z)
+    const elevator = car >= 0 && car !== KEEP_CAR, tower = car === KEEP_CAR ? 'car' : f === K ? 'top' : ''
     if (elevator !== last.current.elevator) onElevator((last.current.elevator = elevator))
+    if (tower !== last.current.tower) onTower((last.current.tower = tower))
 
     // outside the fog turns into a light haze, and so it does at a window, where you look out; inside it's Doom
     // darkness, kept far enough that the sunny courtyard doesn't look like night from the corridors around it. How
     // far each reaches is the chosen view's
     const atWindow = [[0, 0], ...SIDES].some(([a, b]) => at(p.x + a * TILE, p.z + b * TILE) === 'W')
-    const v = VIEWS[view], out = OUTDOOR.includes(at(p.x, p.z)) || atWindow, fog = scene.fog as THREE.Fog, lerp = Math.min(1, dt * 3)
+    // (the keep's office is all windows, high over the city)
+    const v = VIEWS[view], out = OUTDOOR.includes(at(p.x, p.z)) || atWindow || f === K, fog = scene.fog as THREE.Fog, lerp = Math.min(1, dt * 3)
     const [near, far] = out ? v.out : v.in
     fog.color.lerp(out ? haze : DARK, lerp)
     fog.near += (near - fog.near) * lerp
@@ -1558,6 +1756,7 @@ function Player({ layouts, floor, view, onFloor, onElevator, onPick, onAct }: {
       if (o.userData.act) { act = o.userData.act; break }
     }
     if (act?.kind === 'pin' && isUnlocked(act.room)) act = null // already open: nothing to type
+    if (act?.kind === 'lock' && lockOpen(act.room as Lock)) act = null
     if (ex !== last.current.pick) onPick((last.current.pick = ex))
     if (act?.kind !== last.current.act?.kind || act?.room !== last.current.act?.room) onAct((last.current.act = act))
   })

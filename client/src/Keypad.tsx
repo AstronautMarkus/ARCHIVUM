@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { errorText, unlockRoom } from './api'
+import { errorText } from './api'
 
 const KEYS = [['1', '---'], ['2', 'ABC'], ['3', 'DEF'], ['4', 'GHI'], ['5', 'JKL'], ['6', 'MNO'], ['7', 'PQRS'], ['8', 'TUV'], ['9', 'WXYZ']]
 const LEN = 4
@@ -18,9 +18,11 @@ function beep(freq: number, duration = 0.08, volume = 0.06) {
   } catch { /* no audio */ }
 }
 
-// the door's keypad. The PIN is checked by the server; `onOpen` runs once it says it's right. Esc is left to whoever
-// shows it, which closes it when the key is let go of
-export function Keypad({ room, title, onOpen, onClose }: { room: string; title: string; onOpen: () => void; onClose: () => void }) {
+// a door's keypad. `unlock` has the server check the PIN, and throws if it's wrong; `onOpen` runs once it says it's
+// right. Esc is left to whoever shows it, which closes it when the key is let go of
+export function Keypad({ unlock, title, onOpen, onClose }: {
+  unlock: (pin: string) => Promise<unknown>; title: string; onOpen: () => void; onClose: () => void
+}) {
   const [code, setCode] = useState('')
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const busy = useRef(false)
@@ -30,7 +32,7 @@ export function Keypad({ room, title, onOpen, onClose }: { room: string; title: 
     if (pin.length !== LEN) return setResult({ ok: false, text: 'ERROR: ENTER 4 DIGITS' })
     busy.current = true
     try {
-      await unlockRoom(room, pin)
+      await unlock(pin)
       setResult({ ok: true, text: 'WELCOME, OPERATOR' })
       for (let i = 0; i < 2; i++) setTimeout(() => beep(1250, 0.09, 0.1), i * 150)
       setTimeout(() => { onOpen(); onClose() }, 700)

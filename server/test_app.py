@@ -22,7 +22,7 @@ def png():
 
 class Api(unittest.TestCase):
     def setUp(self):
-        for c in ('users', 'floors', 'rooms', 'exhibits'):
+        for c in ('users', 'floors', 'rooms', 'exhibits', 'locks'):
             server.db[c].delete_many({})
         self.c = server.app.test_client()
 
@@ -157,6 +157,31 @@ class Api(unittest.TestCase):
         codes = [self.c.post(url, json={'pin': '0000'}).status_code for _ in range(server.PIN_TRIES + 1)]
         self.assertEqual(codes, [403] * server.PIN_TRIES + [429])
         self.assertEqual(self.c.post(url, json={'pin': '6767'}).status_code, 429)  # even the right one, until it passes
+
+    def test_keep_locks(self):
+        cura, _ = self.account('cura', curator=True)
+        admin, _ = self.account('admin', admin=True)
+        server.failures.clear()
+        self.assertEqual(self.c.get('/api/museum').json['locks'], {'tower': False, 'office': False})
+        self.assertEqual(self.c.post('/api/locks/tower/unlock', json={'pin': '1234'}).status_code, 400)  # no PIN: open
+        self.assertEqual(self.c.put('/api/locks/tower', json={'pin': '1234'}).status_code, 401)
+        self.assertEqual(self.c.put('/api/locks/tower', json={'pin': '1234'}, headers=cura).status_code, 403)
+        self.assertEqual(self.c.put('/api/locks/door', json={'pin': '1234'}, headers=admin).status_code, 404)
+        self.assertEqual(self.c.put('/api/locks/tower', json={'pin': '12a4'}, headers=admin).status_code, 400)
+        self.assertEqual(self.c.put('/api/locks/tower', json={'pin': '1234'}, headers=admin).status_code, 204)
+        self.assertEqual(self.c.put('/api/locks/office', json={'pin': '9876'}, headers=admin).status_code, 204)
+        m = self.c.get('/api/museum').json
+        self.assertEqual(m['locks'], {'tower': True, 'office': True})
+        self.assertNotIn('9876', str(m))
+        self.assertEqual(self.c.post('/api/locks/tower/unlock', json={'pin': '9876'}).status_code, 403)
+        self.assertEqual(self.c.post('/api/locks/tower/unlock', json={'pin': '1234'}).status_code, 204)
+        self.assertEqual(self.c.post('/api/locks/office/unlock', json={'pin': '9876'}).status_code, 204)
+        # wrong PINs are limited per lock, like a room's
+        codes = [self.c.post('/api/locks/office/unlock', json={'pin': '0000'}).status_code for _ in range(server.PIN_TRIES + 1)]
+        self.assertEqual(codes, [403] * server.PIN_TRIES + [429])
+        self.assertEqual(self.c.post('/api/locks/tower/unlock', json={'pin': '1234'}).status_code, 204)
+        self.assertEqual(self.c.put('/api/locks/office', json={'pin': ''}, headers=admin).status_code, 204)
+        self.assertEqual(self.c.get('/api/museum').json['locks'], {'tower': True, 'office': False})
 
     def test_admin_manages_curators(self):
         cura, _ = self.account('cura', curator=True)

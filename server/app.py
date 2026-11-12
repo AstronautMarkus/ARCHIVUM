@@ -194,6 +194,7 @@ def museum():
     open_rooms = {r['_id'] for r in rooms if staff or not r.get('pin')} | held_rooms(request.headers.get('X-Room-Tokens', ''))
     return jsonify(floors=[out(d) for d in db.floors.find().sort(by_order)],
                    rooms=[room_out(r, counts.get(r['_id'], 0)) for r in rooms],
+                   locks={name: bool(db.locks.find_one({'_id': name, 'pin': {'$exists': True}})) for name in LOCKS},
                    exhibits=[out(d) for d in db.exhibits.find({'room': {'$in': list(open_rooms)}}).sort('created', 1)])
 
 
@@ -265,20 +266,54 @@ def held_rooms(header):
     return held
 
 
+def check_pin(what, hashed):
+    """Aborts unless the request's PIN matches `hashed`; wrong ones count against this visitor and `what`."""
+    key, t = (request.remote_addr, what), time.monotonic()
+    recent = [f for f in failures.pop(key, []) if t - f < PIN_WINDOW]
+    if len(recent) >= PIN_TRIES:
+        failures[key] = recent
+        abort(429, 'Demasiados intentos, espera un momento')
+    if not check_password_hash(hashed, clean(request.get_json(silent=True) or {}, 'pin', 20)):
+        failures[key] = [*recent, t]
+        abort(403, 'PIN incorrecto')
+
+
 @app.post('/api/rooms/<id>/unlock')
 def unlock_room(id):
     room = db.rooms.find_one({'_id': oid(id)}) or abort(404, 'Esa sala no existe')
     if not room.get('pin'):
         abort(400, 'Esa sala no tiene PIN')
-    key, t = (request.remote_addr, room['_id']), time.monotonic()
-    recent = [f for f in failures.pop(key, []) if t - f < PIN_WINDOW]
-    if len(recent) >= PIN_TRIES:
-        failures[key] = recent
-        abort(429, 'Demasiados intentos, espera un momento')
-    if not check_password_hash(room['pin'], clean(request.get_json(silent=True) or {}, 'pin', 20)):
-        failures[key] = [*recent, t]
-        abort(403, 'PIN incorrecto')
+    check_pin(room['_id'], room['pin'])
     return jsonify(token=room_tokens.dumps(str(room['_id'])))
+
+
+# The keep's two locks: its elevator, and the door of the secret office at the top. Without a PIN each stays open.
+# They guard no data (the office is furniture), so opening one only tells the client it may let you through
+LOCKS = ('tower', 'office')
+
+
+def lock_name(name):
+    return name if name in LOCKS else abort(404, 'Esa cerradura no existe')
+
+
+@app.put('/api/locks/<name>')
+@need('admin')
+def set_lock(name):
+    """Sets the lock's PIN, or removes it when `pin` is empty."""
+    pin = clean(request.get_json(silent=True) or {}, 'pin', 20)
+    update = {'$set': {'pin': hash_pin(pin)}} if pin else {'$unset': {'pin': ''}}
+    db.locks.update_one({'_id': lock_name(name)}, update, upsert=True)
+    changed()
+    return '', 204
+
+
+@app.post('/api/locks/<name>/unlock')
+def unlock_lock(name):
+    lock = db.locks.find_one({'_id': lock_name(name)}) or {}
+    if not lock.get('pin'):
+        abort(400, 'No tiene PIN')
+    check_pin(f'lock:{name}', lock['pin'])
+    return '', 204
 
 
 def make_thumb(path):

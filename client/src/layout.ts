@@ -58,9 +58,16 @@ export const CORE_X0 = -CORE[0].length, CORE_Z0 = -2
 // slide away
 export const LIFTS = [4, 8].map((tz0) => ({ tx: 6, tz0, tz1: tz0 + 1, x0: 6 * TILE, z: (tz0 + 1) * TILE, w: 2 * TILE, door: 1.6 }))
 // the keep: the castle's tall tower, against the middle of the building's east wall on the entrance axis, across
-// rows KEEP.tz0..tz1 and KEEP.d tiles out into the garden. It rises to keepLevel storeys, always well over the roof
+// rows KEEP.tz0..tz1 and KEEP.d tiles out into the garden. It rises to keepLevel storeys, always well over the roof,
+// where its top room, a tile wider all round, is ARCHIVUM's secret office. A doorway from the east corridor leads
+// into a hall at its foot, and from there an elevator in a glass shaft up its back goes straight to the top
 export const KEEP = { tz0: 5, tz1: 8, d: 3 }
 export const keepLevel = (floors: number) => Math.max(floors + 6, 12)
+// the keep's elevator, in its last column, its doors on the hall at the bottom and on the office's lobby at the top
+export const keepLift = (l: Layout) => {
+  const tx = l.footprint.x1 + KEEP.d, tz0 = KEEP.tz0 + 1, tz1 = KEEP.tz1 - 1
+  return { tx, tz0, tz1, x0: tx * TILE, z: ((tz0 + tz1 + 1) / 2) * TILE, w: (tz1 - tz0 + 1) * TILE, door: 1.6 }
+}
 const ROOM_W = 5
 // rows of the ring: corridor 0-1, arcade 2, courtyard 3-10, arcade 11, corridor 12-13
 const RING_END = 13, COURT_Z0 = 3, COURT_Z1 = 10, LOBBY_X1 = 5, COURT_X0 = 7
@@ -77,6 +84,7 @@ export type Slot = { x: number; z: number; rot: number } // a point on a wall su
 // something you walk right up to and around: it stops you only within r of (x, z), a square like a column's
 export type Post = { x: number; z: number; r: number }
 export type Prop = { kind: 'tree' | 'oak' | 'lamp' | 'sakura' | 'statue' | 'light'; x: number; z: number; s?: number } // s: scale
+export type Rect = [number, number, number, number] // center x, center z, size x, size z; world units
 export type Layout = {
   // rows[tz - z0][tx - x0]: SOLID tiles, '.' floor, 'L' lobby, 'D' doorway, 'C' column, 'E' elevator shaft,
   // 'B' balcony (floor with a railing on its courtyard side), 'W' a window you step into, glazed on its outer side,
@@ -102,6 +110,12 @@ export type Layout = {
   // corners, by their centers; world units
   keep?: { x: number; z: number; w: number; d: number }
   turrets?: { x: number; z: number }[]
+  // thin walls and furniture that stop you, by center and size: [x, z, size x, size z]; and the office's door, in a
+  // wall across x (the keep's top room); world units
+  walls?: Rect[]
+  // ...and where its furniture stands, all of it in `walls` too: the long table, the chairs round it (`back`: which
+  // way along x or z each one's back is), the bookcases on the lobby's outer walls, a desk and a globe
+  office?: { x: number; z: number; w: number; table: Rect; chairs: { x: number; z: number; back: [number, number] }[]; shelves: Rect[]; desk: Rect; globe: Rect }
   // columns, tree trunks, lamp posts, statues...: at most one per tile and wholly inside it, keyed `${tx},${tz}`
   posts: Map<string, Post>
 }
@@ -218,7 +232,10 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
         for (const tz of [z / TILE - 1, z / TILE]) if (!core(tx, tz) && 'pgT'.includes(grid[tz - z0][tx - x0])) set(tx, tz, 'H')
       }
     }
+    // the keep: solid but for a hall at its foot, its elevator's shaft behind that, and a doorway from the corridor
     fill(box.x1 + 1, box.x1 + KEEP.d, KEEP.tz0, KEEP.tz1, 'H')
+    fill(box.x1 + 1, box.x1 + KEEP.d - 1, KEEP.tz0 + 1, KEEP.tz1 - 1, '.')
+    fill(box.x1 + KEEP.d, box.x1 + KEEP.d, KEEP.tz0 + 1, KEEP.tz1 - 1, 'E')
   }
   // real windows in the outer walls of the lobby and the east corridor, every other tile, wherever there's open air
   // outside (downstairs the core stands against most of the lobby, and the keep against the east corridor's
@@ -232,6 +249,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
       if (ground) set(tx + out, tz, 'h')
     }
   }
+
+  if (ground) fill(box.x1, box.x1, KEEP.tz0 + 1, KEEP.tz1 - 1, 'D') // through the east wall into the keep's hall
 
   const out = rooms.map((r, i) => {
     const d = depth[i]
@@ -318,6 +337,37 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   }
 }
 
+// The keep's top room, the secret office, as a level of its own. It spans the keep a tile wider all round. The
+// elevator comes up in the middle of its east side into a lobby walled off from the rest, which you go into
+// through the office's door (`office`) in the lobby's west wall, facing the long table
+export function buildTop(ground: Layout): Layout {
+  const f = ground.footprint, lift = keepLift(ground)
+  const x0 = f.x1 - 1, z0 = KEEP.tz0 - 2, xa = f.x1, xb = f.x1 + KEEP.d + 1 // the room: columns xa..xb
+  const grid = Array.from({ length: KEEP.tz1 - KEEP.tz0 + 5 }, () => Array<string>(KEEP.d + 4).fill('#'))
+  const set = (tx: number, tz: number, c: string) => { grid[tz - z0][tx - x0] = c }
+  for (let tx = xa; tx <= xb; tx++) for (let tz = KEEP.tz0 - 1; tz <= KEEP.tz1 + 1; tz++) set(tx, tz, '.')
+  for (let tz = lift.tz0; tz <= lift.tz1; tz++) { set(lift.tx, tz, 'E'); set(xb, tz, '#') } // the shaft, the machinery behind it
+  const lx = lift.x0 - TILE, [n, s] = [lift.z - lift.w / 2, lift.z + lift.w / 2], door = 1.4, jamb = (lift.w - door) / 2
+  const [tx, tz] = [(xa + 1) * TILE, lift.z], table: Rect = [tx, tz, TABLE.w, TABLE.l]
+  // five chairs down each side, one at each end, their backs away from the table
+  const chairs = [-1, 1].flatMap((e) => [
+    ...Array.from({ length: 5 }, (_, i) => ({ x: tx + e * (TABLE.w / 2 + 0.3), z: tz - 2.4 + i * 1.2, back: [e, 0] as [number, number] })),
+    { x: tx, z: tz + e * (TABLE.l / 2 + 0.35), back: [0, e] as [number, number] },
+  ])
+  const back = (xb + 1) * TILE, shelf = (z: number): Rect => [(lx + back) / 2, z, back - lx - 0.6, 0.4]
+  const shelves = [shelf(n - 0.3), shelf(s + 0.3)], desk: Rect = [back - 0.9, n - 2.2, 0.8, 1.8], globe: Rect = [back - 1.2, s + 2.2, 0.5, 0.5]
+  return {
+    rows: grid.map((r) => r.join('')), x0, z0, footprint: f, start: { x: lx + TILE / 2, z: lift.z }, props: [], rooms: [], posts: new Map(),
+    walls: [
+      [lx + TILE / 2, n, TILE, 0.2], [lx + TILE / 2, s, TILE, 0.2], // the lobby's sides
+      [lx, n + jamb / 2, 0.2, jamb], [lx, s - jamb / 2, 0.2, jamb], // its west wall, either side of the door
+      table, ...shelves, desk, globe, ...chairs.map((c): Rect => [c.x, c.z, 0.5, 0.5]),
+    ],
+    office: { x: lx, z: lift.z, w: door, table, chairs, shelves, desk, globe },
+  }
+}
+export const TABLE = { w: 1.3, l: 6, h: 0.78 } // the office's long table: across x, along z, and its height
+
 export const tileAt = (l: Layout | undefined, x: number, z: number) =>
   l?.rows[Math.floor(z / TILE) - l.z0]?.[Math.floor(x / TILE) - l.x0] ?? '#'
 
@@ -325,6 +375,7 @@ export const tileAt = (l: Layout | undefined, x: number, z: number) =>
 // trunk...) so you can walk right up to it, the west half of a slanted wall's tile; the elevator shaft is up to
 // whoever drives the car
 export function solidAt(l: Layout | undefined, x: number, z: number) {
+  if (l?.walls?.some(([cx, cz, sx, sz]) => Math.abs(x - cx) < sx / 2 && Math.abs(z - cz) < sz / 2)) return true
   const p = l?.posts.get(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`)
   if (p) return Math.abs(x - p.x) < p.r && Math.abs(z - p.z) < p.r
   const c = tileAt(l, x, z), u = x / TILE - Math.floor(x / TILE), v = z / TILE - Math.floor(z / TILE)

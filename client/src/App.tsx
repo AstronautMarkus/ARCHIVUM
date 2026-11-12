@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fileUrl, getToken, logout, useMuseum, useUser, type Exhibit, type Museum, type User } from './api'
+import { fileUrl, getToken, logout, unlockLock, unlockRoom, useMuseum, useUser, type Exhibit, type Lock, type Museum, type User } from './api'
 import { MuseumView, openRoomDoor, VIEWS, type Act, type Chat, type View } from './Museum'
 import { Keypad } from './Keypad'
 import { Admin } from './Admin'
@@ -34,6 +34,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [floorIdx, setFloorIdx] = useState(0)
   const [locked, setLocked] = useState(false)
   const [elevator, setElevator] = useState(false)
+  const [tower, setTower] = useState<'' | 'car' | 'top'>('') // in the keep's elevator, or up in the secret office
   const [picked, setPicked] = useState<Exhibit | null>(null)
   const [viewing, setViewing] = useState<Exhibit | null>(null)
   const [act, setAct] = useState<Act | null>(null)
@@ -64,7 +65,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
       if (e.code === 'KeyE' && picked) { setViewing(picked); document.exitPointerLock() }
-      if (e.code === 'KeyE' && act?.kind === 'pin') { setTyping(act); document.exitPointerLock() }
+      if (e.code === 'KeyE' && (act?.kind === 'pin' || act?.kind === 'lock')) { setTyping(act); document.exitPointerLock() }
       if (e.code === 'KeyE' && act?.kind === 'exit') openRoomDoor(act.room)
       if (e.code === 'KeyT' && user) { e.preventDefault(); setTalking(true) } // T talks, like in DOOM
       if (!elevator) return
@@ -85,10 +86,10 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   return (
     <>
       <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} onFloor={setFloorIdx}
-        onElevator={setElevator} onPick={setPicked} onAct={setAct} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
+        onElevator={setElevator} onTower={setTower} onPick={setPicked} onAct={setAct} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
-          <span>ARCHIVUM · {floor.name} ({current + 1}/{floors.length})</span>
+          <span>ARCHIVUM · {tower === 'top' ? 'Oficina secreta, en lo alto de la torre' : `${floor.name} (${current + 1}/${floors.length})`}</span>
           {user
             ? <span>{user.name} · <a href="#admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
             : <button onClick={() => setLogin(true)}>Entrar / Registrarse</button>}
@@ -111,8 +112,9 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
           {picked && <div>[E] ver · {picked.caption || KIND[picked.kind]}</div>}
-          {act && <div>{act.kind === 'pin' ? `[E] teclear el PIN · ${act.title}` : '[E] SALIDA · abrir la puerta'}</div>}
+          {act && <div>{act.kind === 'exit' ? '[E] SALIDA · abrir la puerta' : `[E] teclear el PIN · ${act.title}`}</div>}
           {elevator && <div>ASCENSOR · piso {current + 1} de {floors.length} · [PgUp] subir · [PgDn] bajar · [1-9] ir directo</div>}
+          {tower === 'car' && <div>ASCENSOR DE LA TORRE · sube a la oficina y baja al vestíbulo solo</div>}
           {/* in the HUD, not inside #lock: a click there would grab the mouse */}
           {paused && (
             <div className="settings">
@@ -136,7 +138,9 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       {typing && (
         <div className="overlay modal" onClick={resume}>
           <div onClick={(e) => e.stopPropagation()}>
-            <Keypad room={typing.room} title={typing.title} onOpen={() => { openRoomDoor(typing.room); reload() }} onClose={resume} />
+            {typing.kind === 'lock'
+              ? <Keypad unlock={(pin) => unlockLock(typing.room as Lock, pin)} title={typing.title} onOpen={() => openRoomDoor(typing.room)} onClose={resume} />
+              : <Keypad unlock={(pin) => unlockRoom(typing.room, pin)} title={typing.title} onOpen={() => { openRoomDoor(typing.room); reload() }} onClose={resume} />}
           </div>
         </div>
       )}

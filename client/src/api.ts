@@ -10,7 +10,9 @@ export type Exhibit = {
   id: string; room: string; author: string; kind: 'photo' | 'video' | 'audio' | 'note'
   file: string; thumb: string; caption: string; text: string
 }
-export type Museum = { floors: Floor[]; rooms: Room[]; exhibits: Exhibit[] }
+// locks: which of the keep's two locks (its elevator, the secret office's door) have a PIN; those without stay open
+export type Lock = 'tower' | 'office'
+export type Museum = { floors: Floor[]; rooms: Room[]; exhibits: Exhibit[]; locks?: Record<Lock, boolean> }
 
 // the session survives reloads in localStorage
 let session: { token: string; user: User | null } = JSON.parse(localStorage.getItem('archivum') ?? '{"token":"","user":null}')
@@ -32,6 +34,14 @@ export async function unlockRoom(room: string, pin: string) {
   roomTokens.set(room, token)
 }
 export const lockRoom = (room: string) => roomTokens.delete(room)
+// the keep's locks you've opened, also only in memory; they guard no data, so the server just says yes or no
+const openLocks = new Set<Lock>()
+export const isLockOpen = (m: Museum, lock: Lock) => !m.locks?.[lock] || openLocks.has(lock)
+export async function unlockLock(lock: Lock, pin: string) {
+  await api(`/locks/${lock}/unlock`, { method: 'POST', json: { pin } })
+  openLocks.add(lock)
+}
+export const relock = (lock: Lock) => openLocks.delete(lock)
 
 export async function api<T = unknown>(path: string, { json, ...init }: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers: Record<string, string> = session.token ? { Authorization: `Bearer ${session.token}` } : {}

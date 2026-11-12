@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBuilding, buildFloor, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
+  buildBuilding, buildFloor, buildTop, keepLift, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
 } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
@@ -196,12 +196,41 @@ test('a PIN room has its door in the doorway, with wall beside it for the keypad
 
 test('the castle: a keep against the middle of the east wall and a round tower on each corner, all solid', () => {
   const [g, up] = buildBuilding([rooms([2, 3, 1]), rooms([])])
-  const f = g.footprint, k = g.keep!
+  const f = g.footprint, k = g.keep!, lift = keepLift(g)
   assert.equal(k.x, (f.x1 + 1) * TILE)
   assert.equal(k.z, 7 * TILE, 'on the entrance axis')
-  for (let x = k.x + 0.1; x < k.x + k.d; x += 0.5) for (let z = k.z - k.w / 2 + 0.1; z < k.z + k.w / 2; z += 0.5) assert.ok(solidAt(g, x, z))
+  assert.equal(lift.z, k.z)
+  // solid but for the hall at its foot, which the corridor leads into, and the elevator's shaft behind it
+  for (let x = k.x + 0.1; x < k.x + k.d; x += 0.5) {
+    for (let z = k.z - k.w / 2 + 0.1; z < k.z + k.w / 2; z += 0.5) {
+      const hall = x < lift.x0 && Math.abs(z - k.z) < lift.w / 2, shaft = x > lift.x0 && Math.abs(z - k.z) < lift.w / 2
+      assert.equal(tileAt(g, x, z), hall ? '.' : shaft ? 'E' : 'H')
+    }
+  }
+  assert.equal(tileAt(g, k.x - 1, k.z - 1), 'D')
+  assert.equal(tileAt(up, k.x - 1, k.z - 1), '#', 'upstairs the east wall stays shut')
   assert.ok(!g.props.some((p) => p.x > k.x && p.x < k.x + k.d && Math.abs(p.z - k.z) < k.w / 2), 'no tree grows in it')
   assert.equal(g.turrets!.length, 4)
   for (const t of g.turrets!) for (const [a, b] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) assert.ok(solidAt(g, t.x + a * 1.5, t.z + b * 1.5))
   assert.ok(reachableAll(g) && reachableAll(up))
+})
+
+test('the secret office: the keep\'s elevator comes up into a lobby, walled off from the office but for its door', () => {
+  const g = buildBuilding([rooms([2, 3, 1])])[0], top = buildTop(g), lift = keepLift(g), door = top.office!
+  assert.equal(tileAt(top, lift.x0 + 1, lift.z - 1), 'E')
+  assert.equal(tileAt(top, lift.x0 - 1, lift.z), '.', 'its doors open on the lobby')
+  assert.equal(tileAt(top, lift.x0 + TILE + 1, lift.z), '#', 'the machinery behind the shaft')
+  // in the lobby you can only go through the door, west to the long table
+  assert.ok(!solidAt(top, door.x, door.z) && solidAt(top, door.x, door.z + door.w / 2 + 0.1) && solidAt(top, door.x, door.z - door.w / 2 - 0.1))
+  for (const dz of [-lift.w / 2, lift.w / 2]) assert.ok(solidAt(top, lift.x0 - 1, lift.z + dz))
+  assert.ok(solidAt(top, g.footprint.x1 * TILE + TILE, lift.z), 'the table stands in the middle of the office')
+  // the office goes all the way round the lobby, a tile wider than the keep, and ends there
+  const k = g.keep!
+  const [w0, w1, n0, s1] = [k.x - TILE + 0.3, k.x + k.d + TILE - 0.3, k.z - k.w / 2 - TILE + 0.3, k.z + k.w / 2 + TILE - 0.3]
+  for (const [x, z] of [[w0, n0], [w0, s1], [w1, n0], [w1, s1]]) assert.ok(!solidAt(top, x, z), 'its corners are clear')
+  // its furniture stands in your way, but leaves a way round the table, between the chairs and the windows
+  for (const c of door.chairs) assert.ok(solidAt(top, c.x, c.z))
+  for (const [x, z] of [door.desk, door.globe]) assert.ok(solidAt(top, x, z))
+  for (let z = n0; z <= s1; z += 0.25) for (const dx of [-0.2, 0, 0.2]) assert.ok(!solidAt(top, w0 + 0.15 + dx, z))
+  for (const [x, z] of [[k.x - TILE - 1, k.z], [k.x + k.d + TILE + 1, k.z - k.w / 2 - 1], [k.x, k.z + k.w / 2 + TILE + 1]]) assert.ok(solidAt(top, x, z))
 })
