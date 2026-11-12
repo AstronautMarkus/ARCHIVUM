@@ -8,7 +8,9 @@ server/   Flask + MongoDB. Cuentas, permisos, subidas, miniaturas y un WebSocket
           que reparte las posiciones de los visitantes y avisa cuando el museo cambia
 ```
 
-Arte: el museo (ladrillo blanco, concreto, cantera, fierro) se pinta en código en `client/src/textures.ts`; la ciudad, la calle, el santuario y los sprites son de [Freedoom](https://freedoom.github.io) (licencia BSD, ver `client/public/doom/LICENSE-freedoom.txt`).
+Arte: el museo (ladrillo blanco, concreto, cantera, fierro) se pinta en código en `client/src/textures.ts`; la ciudad, la calle, el santuario y los sprites son de [Freedoom](https://freedoom.github.io) (licencia BSD, ver `client/public/doom/LICENSE-freedoom.txt`). El cielo es el panorama [Kloofendal 48d Partly Cloudy (Pure Sky)](https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky) de Poly Haven (CC0), reducido a 2048×1024 en `client/public/sky/`.
+
+Todo el mapa está sobre una isla flotante: un disco alrededor del museo y su barrio, con una muralla en el borde (no se puede caer), un mar de nubes debajo y algunas islitas a lo lejos. El radio sale del mapa (`RIM` en `client/src/layout.ts`), así que la isla crece con el museo.
 
 ## El núcleo
 

@@ -9,13 +9,13 @@ import {
 } from './layout'
 import { LIVE_URL } from './config'
 import { fileUrl, floorColor, isLockOpen, isUnlocked, lockRoom, relock, type Exhibit, type Floor, type Lock, type Museum } from './api'
-import { ashlar, books, cantera, ceiling, checker, cloth, hedge, limestone, pennant, planks, railing, slate, spots, whiteBrick } from './textures'
+import { ashlar, books, cantera, ceiling, checker, cloth, clouds, crenel, earth, hedge, limestone, pennant, planks, railing, rock, slate, spots, whiteBrick } from './textures'
 import core from './core.json'
 import { Automap } from './Automap'
 
 const EYE = 1.6
 const GOLD = '#ffcc33'
-const HAZE = '#9fd0f5' // sky at the horizon; outdoor fog fades into it
+const HAZE = '#a3a8b8' // the sky's horizon (see SKY); outdoor fog fades into it
 const DARK = new THREE.Color('#000')
 const STOREY = WALL_H // one floor seen from outside
 const PARAPET = 0.9 // how far the walls around the roof rise above it
@@ -55,8 +55,8 @@ function useTiled(tex: THREE.Texture, rx = 1, ry = 1, oy = 0) {
 // draw distance: fog [near, far] outdoors and indoors, how far the camera sees, and the fog color outdoors.
 // Thick fog also swallows the sky and the city, which otherwise stay sunny
 export const VIEWS = {
-  lejos: { out: [40, 150], in: [15, 90], far: 200, haze: HAZE, thick: false },
-  media: { out: [25, 70], in: [12, 55], far: 200, haze: HAZE, thick: false },
+  lejos: { out: [40, 150], in: [15, 90], far: 450, haze: HAZE, thick: false },
+  media: { out: [25, 70], in: [12, 55], far: 450, haze: HAZE, thick: false },
   niebla: { out: [2, 20], in: [1, 12], far: 30, haze: '#a3a3a3', thick: true },
 }
 export type View = keyof typeof VIEWS
@@ -82,8 +82,9 @@ export function MuseumView({ museum, floor, token, quiet, view, fps, map, bigMap
   const layouts = useMemo(() => buildBuilding(floors), [key])
   const summit = useMemo(() => buildTop(layouts[0]), [layouts]) // the keep's top room, the secret office
   const lockOpen = (lock: Lock) => isLockOpen(museum, lock)
-  // experiment: a painted panorama for the sky; useMemo(makeSky, []) brings back the pixel-art one
-  const sky = useMemo(() => loadSky('/sky.jpg', 20), [])
+  const sky = useMemo(() => Object.assign(new THREE.TextureLoader().load(SKY), {
+    mapping: THREE.EquirectangularReflectionMapping, colorSpace: THREE.SRGBColorSpace,
+  }), [])
   const fog = useMemo(() => new THREE.Fog('#000', 3, 24), [])
   return (
     // render at ~240 lines and let CSS scale it up with hard pixels
@@ -118,74 +119,8 @@ function Fps({ el }: { el: RefObject<HTMLElement | null> }) {
   return null
 }
 
-// a panorama as the sky, lifted `lift` degrees so the city painted in it rises over the 3D one; what it leaves at the
-// bottom is under the ground anyway. three turns it into a cube map once, ignoring offsets, so it's drawn shifted on
-// a canvas that stays empty until then
-function loadSky(url: string, lift: number) {
-  const c = document.createElement('canvas'), img = new Image()
-  c.width = c.height = 0
-  const t = Object.assign(new THREE.CanvasTexture(c), { mapping: THREE.EquirectangularReflectionMapping, colorSpace: THREE.SRGBColorSpace })
-  img.onload = () => {
-    c.width = img.width
-    c.height = img.height
-    c.getContext('2d')!.drawImage(img, 0, -Math.round((img.height * lift) / 180))
-    t.needsUpdate = true
-  }
-  img.src = url
-  return t
-}
-
-// pixel-art city sky as an equirectangular background: blue gradient, clouds, and a skyline with lit windows
-function makeSky() {
-  const W = 1024, H = 512, horizon = H / 2
-  const c = document.createElement('canvas')
-  c.width = W
-  c.height = H
-  const g = c.getContext('2d')!
-  const grad = g.createLinearGradient(0, 0, 0, horizon) // zenith to horizon
-  grad.addColorStop(0, '#1b4aa0')
-  grad.addColorStop(1, HAZE)
-  g.fillStyle = grad
-  g.fillRect(0, 0, W, horizon)
-  g.fillStyle = '#3c4656'
-  g.fillRect(0, horizon, W, H - horizon)
-  let seed = 7
-  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647 // fixed seed: everyone sees the same city
-  for (let i = 0; i < 30; i++) {
-    const x = rand() * W, y = 50 + rand() * 100, r = 5 + rand() * 10
-    for (let k = 0; k < 7; k++) {
-      const bx = x + (rand() - 0.5) * r * 5, by = y + (rand() - 0.5) * r
-      g.fillStyle = k < 2 ? '#d5e6f5' : '#ffffff'
-      for (const wrap of [-W, 0, W]) {
-        g.beginPath()
-        g.ellipse(bx + wrap, by, r * 1.8, r, 0, 0, Math.PI * 2)
-        g.fill()
-      }
-    }
-  }
-  // two rows of towers on the horizon: hazy ones far away, darker ones in front with windows
-  const rows = [['#8aa6c1', 40, 120, 0], ['#56677d', 25, 150, 0.3]] as const
-  for (const [color, minH, maxH, lit] of rows) {
-    for (let x = 0; x < W;) {
-      const w = 14 + rand() * 30, h = minH + rand() * (maxH - minH)
-      g.fillStyle = color
-      g.fillRect(x, horizon - h, w, h)
-      if (lit) {
-        for (let wy = horizon - h + 4; wy < horizon - 4; wy += 6) {
-          for (let wx = x + 3; wx < x + w - 4; wx += 5) {
-            g.fillStyle = rand() < lit ? '#ffd66b' : '#46566b'
-            g.fillRect(wx, wy, 2, 3)
-          }
-        }
-      }
-      x += w + rand() * 6
-    }
-  }
-  const t = new THREE.CanvasTexture(c)
-  t.mapping = THREE.EquirectangularReflectionMapping
-  t.colorSpace = THREE.SRGBColorSpace
-  return t
-}
+// the sky: a photo panorama of clouds all round (CC0, Poly Haven), as the scene's background, an endless sphere
+const SKY = '/sky/kloofendal_48d_partly_cloudy_puresky.jpg'
 
 // the wall texture with a window painted on: one per tile and storey, kept clear of the cell's bottom quarter
 // so a short top band (parapet) shows plain wall. Arched, it's the castle's; with no wall, the window stands alone
@@ -234,6 +169,7 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
     [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing(), hedge(), ashlar(), slate()], [])
   const [castleWin, arch, banner, flag] = useMemo(() => [withWindow(castle, true), withWindow(null, true), pennant(16, 48), pennant(32, 20)], [castle])
   const [oak, shelf, leather, rug] = useMemo(() => [planks(), books(), cloth('#6b1f1f'), pennant(24, 64)], [])
+  const [crenels, soil, stoneUnder, cloud] = useMemo(() => [crenel(), earth(), rock(), clouds()], [])
   const palette = colors.join()
   const marble = useMemo(() => colors.map(checker), [palette]) // one floor pattern per storey, in its own color
   const [lite, facade, street, sidewalk, door, grass, cobbles, wood, metal, panel, plate, steel,
@@ -250,7 +186,6 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
   const ground = layouts[0]
   const top = layouts.length * STOREY + PARAPET // the museum is as tall as its floors, plus a parapet
   const near = (k: number) => Math.abs(k - current) <= 1
-  const field = useTiled(grass, 500, 500)
 
   // sort every tile of every floor into what gets drawn there
   const t = useMemo(() => {
@@ -269,6 +204,7 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
       layout.rows.forEach((row, i) => [...row].forEach((c, j) => {
         const tx = j + layout.x0, tz = i + layout.z0, cell: Cell = [tx, tz, y], x = (tx + 0.5) * TILE, z = (tz + 0.5) * TILE
         const core = k === 0 && tx >= CORE_X0 && tx < 0 && tz >= CORE_Z0 && tz < CORE_Z0 + CORE.length // not the city in its columns
+        if (c === ' ') return // off the island
         if (c === '#') {
           // the city faces the far sidewalk; the museum's walls face its own floors, and outside the skin covers them
           if (AROUND.some(([a, b]) => 'so'.includes(at(tx + a, tz + b)))) t.houses.push(cell)
@@ -435,11 +371,8 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
         )
       })}
       <WallSet cells={t.hedges} tex={leaves} height={1} />
-      {/* grass on to the horizon under the edges of the map */}
-      <mesh rotation-x={-Math.PI / 2} position-y={-0.05}>
-        <planeGeometry args={[1000, 1000]} />
-        <meshBasicMaterial map={field} />
-      </mesh>
+      {ground.island && <Island at={ground.island} tex={{ grass, wall: crenels, earth: soil, rock: stoneUnder }} />}
+      {ground.island && !VIEWS[view].thick && <Skyscape at={ground.island} tex={{ grass, earth: soil, rock: stoneUnder, clouds: cloud }} />}
       <Boxes boxes={t.curbs} tex={facade} repeat={[1, 0.15 / TILE]} />
       <Boxes boxes={t.paint} tex={paint} />
       {t.floors.map((cells, k) => <TileSet key={k} cells={cells} tex={marble[k]} />)}
@@ -1416,6 +1349,97 @@ function Shrine({ at, tex }: { at: NonNullable<Layout['shrine']>; tex: Record<'w
         <mesh position={[0, 1.18, d / 2 - 0.3]}><boxGeometry args={[1.64, 0.05, 0.59]} />{ink}</mesh>
       </group>
     </>
+  )
+}
+
+// ---- the island and the sky round it ----
+
+// a floating island's body, r across at the top: grass to a little past r, a band of earth under the edge and a
+// jagged cone of rock hanging down under it. `far` ones are part of the view: they skip the fog and let the sky
+// show through a little, as hazy as distance makes them
+function IslandBody({ r, tex, far = false }: { r: number; tex: Record<'grass' | 'earth' | 'rock', THREE.Texture>; far?: boolean }) {
+  const R = r + 0.6, depth = r * 0.75
+  const grass = useTiled(tex.grass, R, R) // 2 m a tile across its 2R
+  const earth = useTiled(tex.earth, Math.round((Math.PI * 2 * R) / TILE), 1)
+  const rock = useTiled(tex.rock, Math.round((Math.PI * 2 * R) / (2 * TILE)), Math.max(1, Math.round(depth / 6)))
+  const under = useMemo(() => {
+    const g = new THREE.ConeGeometry(R * 0.98, depth, 40, 10, true).rotateX(Math.PI).translate(0, -5 - depth / 2, 0)
+    const p = g.attributes.position as THREE.BufferAttribute
+    for (let i = 0; i < p.count; i++) { // the rock pushes out and pulls in, in ridges, more so further down
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.atan2(z, x), down = (-5 - y) / depth
+      const k = 1 + down * 0.35 * (Math.sin(a * 7 + y * 0.3) * 0.5 + Math.sin(a * 13 + y * 0.11 + r) * 0.5)
+      p.setXYZ(i, x * k, y + Math.sin(a * 5 + r) * down * 3, z * k)
+    }
+    return g
+  }, [R, depth, r])
+  const look = far ? { fog: false, transparent: true, opacity: 0.7 } : {}
+  return (
+    <>
+      <mesh rotation-x={-Math.PI / 2} position-y={-0.05}><circleGeometry args={[R, 96]} /><meshBasicMaterial map={grass} {...look} /></mesh>
+      <mesh position-y={-2.5}><cylinderGeometry args={[R, R * 0.98, 5, 96, 1, true]} /><meshBasicMaterial map={earth} {...look} /></mesh>
+      <mesh geometry={under}><meshBasicMaterial map={rock} {...look} /></mesh>
+    </>
+  )
+}
+
+// The island the museum stands on (`at`, from the ground floor's layout), with a crenellated wall round its edge
+// that you can look over but not climb: Player's wall is a little inside it
+function Island({ at, tex }: { at: NonNullable<Layout['island']>; tex: Record<'grass' | 'wall' | 'earth' | 'rock', THREE.Texture> }) {
+  const wall = useTiled(tex.wall, Math.round((Math.PI * 2 * at.r) / TILE), 1)
+  return (
+    <group position={[at.x, 0, at.z]}>
+      <IslandBody r={at.r} tex={tex} />
+      <mesh position-y={0.8}>
+        <cylinderGeometry args={[at.r, at.r, 1.6, 180, 1, true]} />
+        <meshBasicMaterial map={wall} alphaTest={0.5} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  )
+}
+
+// What's round the island: below it a sea of clouds in two layers, drifting, fading out toward the panorama at
+// their edges; and a few small islands floating off in the distance, some with trees on them
+const ISLETS = [[0.4, 95, -15, 14], [1.5, 150, 25, 9], [2.3, 120, -35, 18], [3.4, 170, 10, 11], [4.4, 105, 40, 7], [5.4, 140, -25, 13]]
+function Skyscape({ at, tex }: { at: NonNullable<Layout['island']>; tex: Record<'grass' | 'earth' | 'rock' | 'clouds', THREE.Texture> }) {
+  const sea = -at.r * 0.75 - 25 // just under the island's tip
+  const layers = useMemo(() => [7, 4].map((n) => {
+    const t = tex.clouds.clone()
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.repeat.set(n, n)
+    t.needsUpdate = true
+    return t
+  }), [tex.clouds])
+  const fade = useMemo(() => { // opaque in the middle, gone at the rim
+    const c = document.createElement('canvas')
+    c.width = c.height = 64
+    const g = c.getContext('2d')!, r = g.createRadialGradient(32, 32, 0, 32, 32, 32)
+    r.addColorStop(0.55, '#fff')
+    r.addColorStop(1, '#000')
+    g.fillStyle = r
+    g.fillRect(0, 0, 64, 64)
+    return new THREE.CanvasTexture(c)
+  }, [])
+  useFrame(({ clock }) => layers.forEach((t, i) => t.offset.set(clock.elapsedTime * 0.003 * (i + 1), clock.elapsedTime * 0.0015)))
+  return (
+    <group position={[at.x, 0, at.z]}>
+      {layers.map((t, i) => (
+        <mesh key={i} position-y={sea - i * 30} rotation-x={-Math.PI / 2} renderOrder={-1}>
+          <circleGeometry args={[430, 48]} />
+          <meshBasicMaterial map={t} alphaMap={fade} transparent depthWrite={false} fog={false} opacity={0.95 - i * 0.2} />
+        </mesh>
+      ))}
+      {ISLETS.map(([a, d, y, r], i) => (
+        <group key={i} position={[Math.cos(a) * (at.r + d), y, Math.sin(a) * (at.r + d)]}>
+          <IslandBody r={r} tex={tex} far />
+          {r > 10 && [0, 2.1, 4.2].map((t) => (
+            <mesh key={t} position={[Math.cos(t + a) * r * 0.45, 3, Math.sin(t + a) * r * 0.45]}>
+              <coneGeometry args={[2.2, 7, 6]} />
+              <meshBasicMaterial color="#2d5a35" fog={false} transparent opacity={0.7} />
+            </mesh>
+          ))}
+        </group>
+      ))}
+    </group>
   )
 }
 

@@ -164,6 +164,72 @@ export const cloth = (color: string) => texture(16, 16, (g, rand) => {
   speckle(g, rand, 40, ['rgba(255,255,255,0.08)', 'rgba(0,0,0,0.15)'], 0, 0, 16, 16)
 })
 
+// the island's edge: a fringe of grass over brown earth with stones in it, for a band 64 px tall
+export const earth = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#6b4a2e'
+  g.fillRect(0, 0, 64, 64)
+  speckle(g, rand, 900, ['#5a3d25', '#7a5636', '#4c321e', '#836043'])
+  for (let i = 0; i < 14; i++) { // stones
+    g.fillStyle = pick(rand, ['#8c847e', '#7d756f', '#9a928b'])
+    g.fillRect(Math.floor(rand() * 60), 12 + Math.floor(rand() * 48), 3 + Math.floor(rand() * 3), 2 + Math.floor(rand() * 2))
+  }
+  for (let x = 0; x < 64; x++) { // the grass hangs over the edge, ragged
+    g.fillStyle = pick(rand, ['#3c7040', '#4a8a3c', '#2d5a35'])
+    g.fillRect(x, 0, 1, 4 + Math.floor(rand() * 5))
+  }
+})
+
+// the rock under the island: layers of dark stone, cracked
+export const rock = () => texture(64, 64, (g, rand) => {
+  for (let y = 0; y < 64; y += 8) {
+    g.fillStyle = pick(rand, ['#5b5048', '#4e443d', '#665a50', '#463d37'])
+    g.fillRect(0, y, 64, 8)
+    g.fillStyle = '#3a322c'
+    g.fillRect(0, y + 7, 64, 1)
+  }
+  speckle(g, rand, 700, ['#3a322c', '#776a5f', '#52473f'])
+  for (let i = 0; i < 6; i++) g.fillRect(Math.floor(rand() * 64), Math.floor(rand() * 56), 1, 4 + Math.floor(rand() * 8))
+})
+
+// a low wall of pale ashlar with merlons on top, the gaps between them transparent: 2 m along, 1.6 m tall
+export const crenel = () => texture(64, 52, (g, rand) => {
+  g.fillStyle = '#a69e90'
+  g.fillRect(0, 12, 64, 40)
+  for (let y = 12; y < 52; y += 10) {
+    for (let x = (y / 10) % 2 ? 8 : -8; x < 64; x += 16) {
+      g.fillStyle = pick(rand, ['#dcd6c9', '#d4cdbf', '#e0dbcf', '#cfc8ba'])
+      g.fillRect(x, y, 15, 9)
+    }
+  }
+  for (const x of [8, 40]) { // two merlons, and between them the sky
+    g.fillStyle = '#d6d0c3'
+    g.fillRect(x, 0, 16, 12)
+    g.fillStyle = '#ebe7dd'
+    g.fillRect(x, 0, 16, 1)
+  }
+  speckle(g, rand, 200, ['#c7bfb0', '#b9b1a2'], 0, 12, 64, 40)
+})
+
+// soft white clouds on transparency, wrapping at every edge so they tile
+export const clouds = () => {
+  const t = texture(256, 256, (g, rand) => {
+    for (let i = 0; i < 70; i++) {
+      const x = rand() * 256, y = rand() * 256, r = 10 + rand() * 34, a = 0.25 + rand() * 0.45
+      for (const dx of [-256, 0, 256]) {
+        for (const dy of [-256, 0, 256]) {
+          const puff = g.createRadialGradient(x + dx, y + dy, 0, x + dx, y + dy, r)
+          puff.addColorStop(0, `rgba(255,255,255,${a})`)
+          puff.addColorStop(1, 'rgba(255,255,255,0)')
+          g.fillStyle = puff
+          g.fillRect(x + dx - r, y + dy - r, r * 2, r * 2)
+        }
+      }
+    }
+  })
+  t.magFilter = t.minFilter = THREE.LinearFilter // soft, unlike everything else
+  return t
+}
+
 // a dark gallery ceiling crossed by two beams, each lit along one edge
 function paintCeiling(g: CanvasRenderingContext2D, rand: Rand) {
   g.fillStyle = '#28282c'

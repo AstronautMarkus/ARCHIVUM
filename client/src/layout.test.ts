@@ -70,8 +70,8 @@ test('the building is the same box on every floor, with the street going all the
   const [g] = floors, f = g.footprint
   for (const l of floors) assert.ok(l.rooms.flatMap((r) => r.slots).every((s) => s.z > f.z0 * TILE && s.z < (f.z1 + 1) * TILE))
   // walking straight out from each side (the core's to the west): garden walk, garden, hedge, sidewalk, street,
-  // sidewalk, then the forest to the west, a house or an alley to the north and the city elsewhere
-  for (const [tx, tz, dx, dz, past] of [[CORE_X0, -1, -1, 0, '[gT]'], [f.x1, -1, 1, 0, '#'], [9, f.z0, 0, -1, '[#s]'], [9, f.z1, 0, 1, '#']] as const) {
+  // sidewalk, then the forest to the west and houses or their alleys everywhere else
+  for (const [tx, tz, dx, dz, past] of [[CORE_X0, -1, -1, 0, '[gT]'], [f.x1, -1, 1, 0, '[#s]'], [9, f.z0, 0, -1, '[#s]'], [9, f.z1, 0, 1, '[#s]']] as const) {
     let way = ''
     for (let k = 1; k <= 10; k++) way += tileAt(g, (tx + dx * k + 0.5) * TILE, (tz + dz * k + 0.5) * TILE)
     assert.match(way, new RegExp(`^p+[gT]+hs+o+s+${past}$`))
@@ -249,4 +249,23 @@ test('the map names where you stand: each room inside its walls, and the places 
   assert.equal(placeAt(l, SPAWN.x, SPAWN.z), 'Lobby')
   assert.equal(placeAt(l, l.court!.fountain.x - TILE * 2.5, l.court!.fountain.z - TILE * 1.5), 'Patio')
   assert.equal(placeAt(l, l.start.x, l.start.z), 'Exterior')
+})
+
+test('the ground floor is a floating island: a disc with a wall round it, nothing past it, houses and forest to its edge', () => {
+  const [g, up] = buildBuilding([rooms([4, 6, 3, 5]), rooms([2, 2])]), { x, z, r } = g.island!
+  const at = (a: number, d: number) => [x + Math.cos(a) * d, z + Math.sin(a) * d]
+  for (let a = 0; a < Math.PI * 2; a += 0.05) {
+    assert.ok(solidAt(g, ...(at(a, r - 0.2) as [number, number])), 'the wall stops you')
+    assert.ok(solidAt(g, ...(at(a, r + 3) as [number, number])), 'and past it there is nothing')
+    assert.ok(!solidAt(g, ...(at(a, r - 1.5) as [number, number])), 'a strip of grass runs all round inside it')
+  }
+  // everything that was on the map before is on the island, well inside the wall
+  const f = g.footprint, corners = [[f.x0 - 30, f.z0 - 30], [f.x1 + 11, f.z0 - 30], [f.x0 - 30, f.z1 + 11], [f.x1 + 11, f.z1 + 11]]
+  for (const [tx, tz] of corners) assert.ok(Math.hypot(tx * TILE - x, tz * TILE - z) < r - 4)
+  // the forest reaches the wall to the west, houses do to the north, east and south
+  const tileTo = (a: number) => tileAt(g, ...(at(a, r - 8) as [number, number]))
+  assert.match(tileTo(Math.PI), /[gT]/)
+  for (const a of [0, Math.PI / 2, -Math.PI / 2]) assert.match(tileTo(a), /[#s]/)
+  assert.ok(reachableAll(g))
+  assert.equal(up.island, undefined, 'upstairs is all building')
 })

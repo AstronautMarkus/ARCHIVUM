@@ -16,8 +16,9 @@ export const WALL_H = 3.5 // also one storey: floors stack with no gap
 export const DOOR_H = 2.2
 export const SPAWN = { x: 2.5 * TILE, z: 1.5 * TILE } // a safe spot in the lobby, on every floor
 // wall, fountain, reception desk, courtyard void, 'H' a block drawn by its own component (the shrine's hall, the
-// entrance's piers), hedge; posts, the elevator and the core's slanted walls are special
-export const SOLID = '#FRvHh'
+// entrance's piers), hedge, and the empty sky off the island's edge; posts, the elevator and the core's slanted
+// walls are special
+export const SOLID = '#FRvHh '
 export const OUTDOOR = 'osgpT' // tiles under the open sky
 export const MAX_FLOORS = 99
 export const COLUMN = 0.35 // half the width of a column
@@ -79,6 +80,10 @@ const NEAR = BLOCK.indexOf('s') + 1, FAR = BLOCK.length // the block's near and 
 const HEDGE = BLOCK.lastIndexOf('g') + 1 // the garden's outer edge, where its hedge and gate are
 // how far the forest and the shrine reach west of the city, and the shrine and the houses north of it, in tiles
 const WILD = 20
+// The whole map is a floating island: a disc around the rectangle of all of the above, RIM tiles wider than its
+// corners, with a stone wall round its edge, a strip of grass inside the wall and nothing outside it. Past the far
+// sidewalk the houses go on north, east and south to that strip, and the forest west
+const RIM = 3
 
 export type RoomIn = { id: string; title: string; count: number; locked?: boolean }
 export type Slot = { x: number; z: number; rot: number } // a point on a wall surface, rot faces into the room
@@ -107,6 +112,8 @@ export type Layout = {
   // flagpoles out in the garden; world units
   entrance?: { x: number; z: number; w: number; d: number; columns: { x: number; z: number }[]; flags: { x: number; z: number }[] }
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
+  // the island the ground floor stands on: its middle and the radius of the wall round its edge; world units
+  island?: { x: number; z: number; r: number }
   // the shrine's hall, the z of its torii and where its lanterns stand; world units
   shrine?: { x: number; z: number; w: number; d: number; gate: number; lanterns: { x: number; z: number }[] }
   // the keep's west face x, center z, width along z and depth along x; and the round towers on the building's
@@ -169,9 +176,14 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   // and the forest, shrine and houses past that
   const site = ground ? { ...box, x0: CORE_X0 } : box
   const m = ground ? BLOCK.length + 1 : 0, wild = ground ? WILD : 0
-  const x0 = site.x0 - m - wild, z0 = site.z0 - m - wild, z1 = site.z1 + m
-  const grid = Array.from({ length: z1 - z0 + 1 }, () => Array<string>(site.x1 + m + 1 - x0).fill('#'))
-  const set = (tx: number, tz: number, c: string) => { grid[tz - z0][tx - x0] = c }
+  const x0 = site.x0 - m - wild, z0 = site.z0 - m - wild, x1 = site.x1 + m, z1 = site.z1 + m // the map's rectangle
+  // downstairs, the island round it (see RIM): its middle and its wall's radius, in tiles; the grid is its square
+  const island = { x: (x0 + x1 + 1) / 2, z: (z0 + z1 + 1) / 2, r: Math.hypot(x1 + 1 - x0, z1 + 1 - z0) / 2 + RIM }
+  const [gx0, gz0, gx1, gz1] = !ground ? [x0, z0, x1, z1]
+    : [Math.floor(island.x - island.r) - 1, Math.floor(island.z - island.r) - 1, Math.ceil(island.x + island.r), Math.ceil(island.z + island.r)]
+  const grid = Array.from({ length: gz1 - gz0 + 1 }, () => Array<string>(gx1 - gx0 + 1).fill('#'))
+  const set = (tx: number, tz: number, c: string) => { grid[tz - gz0][tx - gx0] = c }
+  const get = (tx: number, tz: number) => grid[tz - gz0][tx - gx0]
   const posts = new Map<string, Post>()
   // a post goes on every tile it reaches into, so solidAt only ever has to look at the tile you're on
   const post = (x: number, z: number, r: number) => {
@@ -198,7 +210,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   for (let tx = ax; tx <= bx; tx++) {
     for (let tz = az; tz <= bz; tz++) {
       const edge = tx === ax || tx === bx || tz === az || tz === bz
-      if (edge && !ground && grid[tz - z0][tx - x0] !== 'E') set(tx, tz, 'B')
+      if (edge && !ground && get(tx, tz) !== 'E') set(tx, tz, 'B')
     }
   }
   // how far (tx, tz) is out from the outer walls of the building (and the core) along x and along z, in tiles; 0 or
@@ -210,16 +222,19 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   if (ground) {
     fill(2, 2, 2, 4, 'R') // reception desk, on your left as you come in
     fill(0, 0, 6, 7, 'D') // double door from the core
-    for (let tx = x0 + 1; tx < site.x1 + m; tx++) {
-      for (let tz = z0 + 1; tz < z1; tz++) {
+    for (let tx = gx0; tx <= gx1; tx++) {
+      for (let tz = gz0; tz <= gz1; tz++) {
         const d = Math.max(...away(tx, tz)), c = BLOCK[d - 1], w = site.x0 - tx, n = site.z0 - tz // how far west and north
-        if (w >= FAR && n >= NEAR && n <= FAR) set(tx, tz, BLOCK[n - 1]) // the street north of the block runs on west
+        const edge = island.r - Math.hypot(tx + 0.5 - island.x, tz + 0.5 - island.z) // how far in from the wall
+        if (edge < 0) set(tx, tz, ' ') // off the island
+        else if (edge < RIM - 0.5) set(tx, tz, 'g') // the grass inside the wall
+        else if (w >= FAR && n >= NEAR && n <= FAR) set(tx, tz, BLOCK[n - 1]) // the street north of the block runs on west
         // a walk through the garden to the door, and a hedge around the garden, open at the gate
         else if (d > 0 && d <= FAR) set(tx, tz, c !== 'g' ? c : byDoor(tx, tz) ? 'p' : d === HEDGE && !byDoor(tx, tz, 1) ? 'h' : c)
-        // the forest, thick along the map's edge
-        else if (w > FAR && n < NEAR) set(tx, tz, Math.min(tx - x0, z1 - tz) <= 2 || noise(tx, tz) < 0.4 ? 'T' : 'g')
-        else if (n > FAR && w <= FAR) set(tx, tz, tx % 3 && tz % 3 ? '#' : 's') // houses two tiles square, alleys between
-        // the shrine grounds are laid out below; past the east and south sidewalks, the city
+        // the forest, thick along the wall
+        else if (w > FAR) set(tx, tz, edge < RIM + 2.5 || noise(tx, tz) < 0.4 ? 'T' : 'g')
+        else if (d > FAR) set(tx, tz, tx % 3 && tz % 3 ? '#' : 's') // houses two tiles square, alleys between
+        // the shrine grounds are laid out below, over the forest
       }
     }
     // the core, in a garden where it leaves room; the entrance tower's roof is held up by two columns, one either
@@ -232,7 +247,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     const core = (tx: number, tz: number) => tx >= CORE_X0 && tx < 0 && tz >= CORE_Z0 && tz < CORE_Z0 + CORE.length
     for (const { x, z } of turrets) {
       for (const tx of [x / TILE - 1, x / TILE]) {
-        for (const tz of [z / TILE - 1, z / TILE]) if (!core(tx, tz) && 'pgT'.includes(grid[tz - z0][tx - x0])) set(tx, tz, 'H')
+        for (const tz of [z / TILE - 1, z / TILE]) if (!core(tx, tz) && 'pgT'.includes(get(tx, tz))) set(tx, tz, 'H')
       }
     }
     // the keep: solid but for a hall at its foot, its elevator's shaft behind that, and a doorway from the corridor
@@ -247,7 +262,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   for (const [tx, out] of [[box.x0, -1], [box.x1, 1]]) {
     for (let tz = 0; tz <= RING_END; tz++) {
       if (!((tx + tz) & 1) || (out > 0 && tz >= KEEP.tz0 && tz <= KEEP.tz1)) continue
-      if (ground && !'gpT'.includes(grid[tz - z0][tx + out - x0])) continue
+      if (ground && !'gpT'.includes(get(tx + out, tz))) continue
       set(tx, tz, 'W')
       if (ground) set(tx + out, tz, 'h')
     }
@@ -274,7 +289,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     return { id: r.id, title: r.title, sign, slots: slots.slice(0, r.count), locked: !!r.locked, dir, door: { tx: doorX, tz: doorZ }, area }
   })
 
-  if (!ground) return { rows: grid.map((r) => r.join('')), x0, z0, footprint: box, start: SPAWN, props: [], rooms: out, posts }
+  if (!ground) return { rows: grid.map((r) => r.join('')), x0: gx0, z0: gz0, footprint: box, start: SPAWN, props: [], rooms: out, posts }
 
   // the shrine grounds, in the corner between the forest and the houses: a clearing in the trees, and down its
   // middle a path two tiles wide from the street, through the torii, up to the hall
@@ -295,14 +310,14 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   const garden = mid('g')
   const props = [prop('light', site.x0 - HEDGE, 5), prop('light', site.x0 - HEDGE, 8)]
   props.push(prop('sakura', -2, 1), prop('statue', -9, 1), prop('statue', -4, 10))
-  for (let tx = x0; tx <= box.x1 + m; tx++) {
-    for (let tz = z0; tz <= z1; tz++) {
+  for (let tx = gx0; tx <= gx1; tx++) {
+    for (let tz = gz0; tz <= gz1; tz++) {
       const [dx, dz] = away(tx, tz), d = Math.max(dx, dz), n = (((tx + tz) % 12) + 12) % 12
       if (dx === garden && dz === garden) props.push(prop('statue', tx, tz))
-      else if (!byDoor(tx, tz, 2) && d === garden && n % 3 === 0 && grid[tz - z0][tx - x0] === 'g') set(tx, tz, 'T')
+      else if (!byDoor(tx, tz, 2) && d === garden && n % 3 === 0 && get(tx, tz) === 'g') set(tx, tz, 'T')
       else if (!byDoor(tx, tz, 2) && d === NEAR && n % 4 === 0) props.push(prop('lamp', tx, tz))
       // a tree on every tree tile, of either kind, some bigger than others
-      if (grid[tz - z0][tx - x0] === 'T') {
+      if (get(tx, tz) === 'T') {
         props.push({ kind: noise(tx, tz, 3) < 0.5 ? 'tree' : 'oak', ...trunk(tx, tz), s: 0.8 + noise(tx, tz, 4) * 0.5 })
       }
     }
@@ -324,7 +339,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   const flags = [4, 9].map((tz) => ({ x: (site.x0 - garden + 0.5) * TILE, z: (tz + 0.5) * TILE }))
   for (const f of flags) post(f.x, f.z, FLAGPOLE)
   return {
-    rows: grid.map((r) => r.join('')), x0, z0, footprint: box, props, rooms: out, posts,
+    rows: grid.map((r) => r.join('')), x0: gx0, z0: gz0, footprint: box, props, rooms: out, posts,
+    island: { x: island.x * TILE, z: island.z * TILE, r: island.r * TILE },
     start: { x: (site.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
     door: { x: (CORE_X0 + PORCH + 0.5) * TILE, z: 7 * TILE, w: 2 * TILE },
     entrance: {
@@ -380,6 +396,7 @@ export const tileAt = (l: Layout | undefined, x: number, z: number) =>
 // whoever drives the car
 export function solidAt(l: Layout | undefined, x: number, z: number) {
   if (l?.walls?.some(([cx, cz, sx, sz]) => Math.abs(x - cx) < sx / 2 && Math.abs(z - cz) < sz / 2)) return true
+  if (l?.island && Math.hypot(x - l.island.x, z - l.island.z) > l.island.r - 0.4) return true // the wall round its edge
   const p = l?.posts.get(`${Math.floor(x / TILE)},${Math.floor(z / TILE)}`)
   if (p) return Math.abs(x - p.x) < p.r && Math.abs(z - p.z) < p.r
   const c = tileAt(l, x, z), u = x / TILE - Math.floor(x / TILE), v = z / TILE - Math.floor(z / TILE)
