@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBuilding, buildFloor, buildTop, keepLift, liftDoor, liftShaft, placeAt, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
+  buildBuilding, buildFloor, buildTop, keepLift, liftDoor, LOT, liftShaft, placeAt, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
 } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
@@ -70,8 +70,8 @@ test('the building is the same box on every floor, with the street going all the
   const [g] = floors, f = g.footprint
   for (const l of floors) assert.ok(l.rooms.flatMap((r) => r.slots).every((s) => s.z > f.z0 * TILE && s.z < (f.z1 + 1) * TILE))
   // walking straight out from each side (the core's to the west): garden walk, garden, hedge, sidewalk, street,
-  // sidewalk, then the forest to the west and houses or their alleys everywhere else
-  for (const [tx, tz, dx, dz, past] of [[CORE_X0, -1, -1, 0, '[gT]'], [f.x1, -1, 1, 0, '[#s]'], [9, f.z0, 0, -1, '[#s]'], [9, f.z1, 0, 1, '[#s]']] as const) {
+  // sidewalk, then the forest to the west and the town everywhere else: a lot, an alley, or garden where a lot didn't fit
+  for (const [tx, tz, dx, dz, past] of [[CORE_X0, -1, -1, 0, '[gT]'], [f.x1, -1, 1, 0, '[#sg]'], [9, f.z0, 0, -1, '[#sg]'], [9, f.z1, 0, 1, '[#sg]']] as const) {
     let way = ''
     for (let k = 1; k <= 10; k++) way += tileAt(g, (tx + dx * k + 0.5) * TILE, (tz + dz * k + 0.5) * TILE)
     assert.match(way, new RegExp(`^p+[gT]+hs+o+s+${past}$`))
@@ -262,10 +262,37 @@ test('the ground floor is a floating island: a disc with a wall round it, nothin
   // everything that was on the map before is on the island, well inside the wall
   const f = g.footprint, corners = [[f.x0 - 30, f.z0 - 30], [f.x1 + 11, f.z0 - 30], [f.x0 - 30, f.z1 + 11], [f.x1 + 11, f.z1 + 11]]
   for (const [tx, tz] of corners) assert.ok(Math.hypot(tx * TILE - x, tz * TILE - z) < r - 4)
-  // the forest reaches the wall to the west, houses do to the north, east and south
-  const tileTo = (a: number) => tileAt(g, ...(at(a, r - 8) as [number, number]))
-  assert.match(tileTo(Math.PI), /[gT]/)
-  for (const a of [0, Math.PI / 2, -Math.PI / 2]) assert.match(tileTo(a), /[#s]/)
+  // the forest reaches the wall to the west, the town does to the north, east and south: a lot near it each way
+  assert.match(tileAt(g, ...(at(Math.PI, r - 8) as [number, number])), /[gT]/)
+  for (const a of [0, Math.PI / 2, -Math.PI / 2]) {
+    const [px, pz] = at(a, r - 12)
+    assert.ok(g.lots!.some((l) => Math.hypot((l.x0 + LOT[l.kind] / 2) * TILE - px, (l.z0 + LOT[l.kind] / 2) * TILE - pz) < 20), `lots toward ${a}`)
+  }
   assert.ok(reachableAll(g))
   assert.equal(up.island, undefined, 'upstairs is all building')
+})
+
+test('the town: houses on small lots to the north, blocks of flats on big ones east and south, every lot whole', () => {
+  const [g] = buildBuilding([rooms([4, 6, 3, 5]), rooms([2, 2])]), lots = g.lots!, f = g.footprint
+  assert.ok(lots.filter((l) => l.kind === 'house').length > 40 && lots.filter((l) => l.kind === 'block').length > 8)
+  const taken = new Set<string>()
+  for (const l of lots) {
+    for (let a = 0; a < LOT[l.kind]; a++) {
+      for (let b = 0; b < LOT[l.kind]; b++) {
+        const key = `${l.x0 + a},${l.z0 + b}`
+        assert.ok(!taken.has(key), 'lots never overlap')
+        taken.add(key)
+        assert.equal(tileAt(g, (l.x0 + a + 0.5) * TILE, (l.z0 + b + 0.5) * TILE), '#')
+      }
+    }
+    if (l.kind === 'house') assert.ok(l.z0 < f.z0, 'houses are north of the block')
+    else assert.ok(l.x0 > f.x1 || l.z0 > f.z1, 'blocks are east or south of it')
+  }
+  // every solid tile out in the town belongs to a lot: nothing half built
+  const [x0, x1, z0, z1] = [f.x0 - 30, f.x1 + 10, f.z0 - 10, f.z1 + 10]
+  g.rows.forEach((row, i) => [...row].forEach((c, j) => {
+    const tx = j + g.x0, tz = i + g.z0
+    if (c === '#' && (tx > x1 || tz > z1 || (tz < z0 && tx > x0))) assert.ok(taken.has(`${tx},${tz}`), `${tx},${tz}`)
+  }))
+  assert.ok(reachableAll(g))
 })

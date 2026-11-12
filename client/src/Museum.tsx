@@ -9,9 +9,10 @@ import {
 } from './layout'
 import { LIVE_URL } from './config'
 import { fileUrl, floorColor, isLockOpen, isUnlocked, lockRoom, relock, type Exhibit, type Floor, type Lock, type Museum } from './api'
-import { ashlar, books, cantera, ceiling, checker, cloth, clouds, crenel, earth, hedge, limestone, pennant, planks, railing, rock, slate, spots, whiteBrick } from './textures'
+import { ashlar, books, cantera, ceiling, checker, cloth, clouds, crenel, earth, hedge, limestone, pennant, planks, railing, rock, slate, spots, whiteBrick, withWindow } from './textures'
 import core from './core.json'
 import { Automap } from './Automap'
+import { City } from './City'
 
 const EYE = 1.6
 const GOLD = '#ffcc33'
@@ -26,10 +27,6 @@ const ARCH = 0.5 // how thick the arches are
 const LEDGE = 0.4 // how high the stone ledge at the foot of a window's glass stands
 // the core's paintings, as exhibits so they hang, get picked and open in the viewer like any other
 const CORE_EXHIBITS: Exhibit[] = core.map((e, i) => ({ id: `core${i}`, room: '', author: '', kind: 'photo', thumb: '', text: '', ...e }))
-// the city around the block: storeys and brick of each building, changing every three tiles, so each of the
-// houses north of the block (two tiles square, an alley on every third tile) gets one
-const CITY = [[3, 0], [4, 1], [2, 2], [5, 3], [3, 1], [1, 2], [2, 3], [1, 0]]
-const cityBlock = (tx: number, tz: number) => Math.floor(noise(Math.floor(tx / 3), Math.floor(tz / 3)) * CITY.length)
 const SIDES = [[1, 0], [-1, 0], [0, 1], [0, -1]], AROUND = [...SIDES, [1, 1], [1, -1], [-1, 1], [-1, -1]]
 const odd = ([tx, tz]: readonly number[]) => ((tx + tz) % 2 + 2) % 2 === 1 // which wall tiles get a window
 const tmp = new THREE.Vector3()
@@ -122,37 +119,6 @@ function Fps({ el }: { el: RefObject<HTMLElement | null> }) {
 // the sky: a photo panorama of clouds all round (CC0, Poly Haven), as the scene's background, an endless sphere
 const SKY = '/sky/kloofendal_48d_partly_cloudy_puresky.jpg'
 
-// the wall texture with a window painted on: one per tile and storey, kept clear of the cell's bottom quarter
-// so a short top band (parapet) shows plain wall. Arched, it's the castle's; with no wall, the window stands alone
-// on a transparent cell, to stick on anything
-function withWindow(tex: THREE.Texture | null, arched = false) {
-  const c = document.createElement('canvas')
-  c.width = c.height = 128
-  const g = c.getContext('2d')!
-  if (tex) g.drawImage(tex.image as HTMLImageElement, 0, 0, 128, 128)
-  // the opening, `i` px in from its frame: a rectangle, or one whose top is a half circle
-  const opening = (i: number) => {
-    g.beginPath()
-    if (arched) {
-      g.arc(64, 54, 30 - i, Math.PI, 0)
-      g.lineTo(94 - i, 94 - i)
-      g.lineTo(34 + i, 94 - i)
-    } else g.rect(34 + i, 24 + i, 60 - 2 * i, 70 - 2 * i)
-    g.fill()
-  }
-  g.fillStyle = '#2b2b30'
-  opening(0)
-  const glass = g.createLinearGradient(0, 28, 0, 90)
-  glass.addColorStop(0, '#9fc3e6')
-  glass.addColorStop(1, '#2d4f7a')
-  g.fillStyle = glass
-  opening(4)
-  g.fillStyle = '#2b2b30'
-  g.fillRect(62, 28, 4, 62)
-  g.fillRect(38, 56, 52, 4)
-  return new THREE.CanvasTexture(c)
-}
-
 type Cell = [number, number, number] // tile x, tile z, height of the floor it belongs to
 type Box = [number, number, number, number, number, number] // center x, y, z and size x, y, z
 type Slant = [number, number, string] // tile x, tile z, '\' or '/'
@@ -173,16 +139,14 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
   const palette = colors.join()
   const marble = useMemo(() => colors.map(checker), [palette]) // one floor pattern per storey, in its own color
   const [lite, facade, street, sidewalk, door, grass, cobbles, wood, metal, panel, plate, steel,
-    light, paint, pbrick, brick, brick1, stwall, bark, ...water] = useTexture([
+    light, paint, bark, ...water] = useTexture([
     '/doom/tlite6_1.png', '/doom/stonew5.png', '/doom/asphalt.png', '/doom/pston2.png', '/doom/door9_1.png',
     '/doom/grass1.png', '/doom/mflr8_3.png', '/doom/wood.png', '/doom/door2_5.png',
     '/doom/aqpanl08.png', '/doom/aqpanl05.png', '/doom/flat23.png', '/doom/flat17.png', '/doom/pwhite.png',
-    '/doom/pbrick8.png', '/doom/brick.png', '/doom/brick1.png', '/doom/stwall.png', '/doom/mywood.png',
+    '/doom/mywood.png',
     '/doom/fwater1.png', '/doom/fwater2.png', '/doom/fwater3.png', '/doom/fwater4.png',
   ])
   useMemo(() => water.forEach((t) => retro(t)), [water])
-  const bricks = [pbrick, brick, brick1, stwall]
-  const brickWin = useMemo(() => [pbrick, brick, brick1, stwall].map((b) => withWindow(b)), [pbrick, brick, brick1, stwall])
   const ground = layouts[0]
   const top = layouts.length * STOREY + PARAPET // the museum is as tall as its floors, plus a parapet
   const near = (k: number) => Math.abs(k - current) <= 1
@@ -190,7 +154,7 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
   // sort every tile of every floor into what gets drawn there
   const t = useMemo(() => {
     const t = {
-      inner: [] as Cell[], houses: [] as Cell[], doors: [] as Cell[], columns: [] as Cell[], desk: [] as Cell[],
+      inner: [] as Cell[], doors: [] as Cell[], columns: [] as Cell[], desk: [] as Cell[],
       rails: [] as Box[], beams: [] as Box[], parapet: [] as Box[], curbs: [] as Box[], paint: [] as Box[],
       floors: layouts.map(() => [] as Cell[]), arches: [] as Arch[], grass: [] as Cell[], path: [] as Cell[], street: [] as Cell[],
       sidewalk: [] as Cell[], ceiling: [] as Cell[], lights: [] as Cell[],
@@ -207,7 +171,7 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
         if (c === ' ') return // off the island
         if (c === '#') {
           // the city faces the far sidewalk; the museum's walls face its own floors, and outside the skin covers them
-          if (AROUND.some(([a, b]) => 'so'.includes(at(tx + a, tz + b)))) t.houses.push(cell)
+          if (AROUND.some(([a, b]) => 'so'.includes(at(tx + a, tz + b)))) { /* a lot in town: City builds on it */ }
           else if (SIDES.some(([a, b]) => !('#' + OUTDOOR).includes(at(tx + a, tz + b)))) t.inner.push(cell)
           // the core has no skin: its own walls rise into a parapet around its roof wherever they face outside
           if (core && AROUND.some(([a, b]) => OUTDOOR.includes(at(tx + a, tz + b)))) t.crest.push([x, WALL_H + PARAPET / 2, z, TILE, PARAPET, TILE])
@@ -308,9 +272,6 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
       z: lines.flatMap((y) => [ax + 0.2, bx - 0.2].map((x): Box => [x, y + 0.1, (az + bz) / 2, 0.4, 0.2, bz - az - 0.8])),
       long: [(bx - ax) / TILE, 0.1] as [number, number], wide: [(bz - az) / TILE, 0.1] as [number, number],
     }
-    const city = [...Map.groupBy(t.houses, ([tx, tz]) => cityBlock(tx, tz))].map(([i, cells]) => ({
-      i, h: CITY[i][0] * STOREY + 0.5, brick: CITY[i][1], win: cells.filter(odd), plain: cells.filter((c) => !odd(c)),
-    }))
     const deskZ = t.desk.reduce((s, [, tz]) => s + (tz + 0.5) * TILE, 0) / (t.desk.length || 1)
     // battlements: a merlon a meter long in the middle of every tile of both parapets, the outer one and the one
     // around the courtyard, each in its parapet's stone
@@ -323,18 +284,13 @@ function World({ layouts, summit, lockOpen, colors, byRoom, quiet, current, view
       Array.from({ length: f.x1 - f.x0 - 3 }, (_, i) => f.x0 + 2 + i)
         .filter((tx) => !odd([tx, side ? f.z1 : f.z0]) && (tx - f.x0) % 4 < 2)
         .map((tx) => ({ x: (tx + 0.5) * TILE, z, rot: side ? 0 : Math.PI })))
-    return { ...t, skin, city, deskZ, cornice, merlons, banners }
+    return { ...t, skin, deskZ, cornice, merlons, banners }
   }, [layouts, top, ground])
 
   return (
     <>
-      {/* the city stays out of "walls": it never hides an exhibit, and that keeps the aiming ray cheap */}
-      {t.city.map(({ i, h, brick, win, plain }) => (
-        <Fragment key={i}>
-          <WallSet cells={win} tex={brickWin[brick]} height={h} every={STOREY} fog={VIEWS[view].thick} />
-          <WallSet cells={plain} tex={bricks[brick]} height={h} every={STOREY} fog={VIEWS[view].thick} />
-        </Fragment>
-      ))}
+      {/* the town stays out of "walls": it never hides an exhibit, and that keeps the aiming ray cheap */}
+      <City ground={ground} />
       <group name="walls">
         <WallSet cells={t.inner} tex={wall} height={WALL_H} />
         <Boxes boxes={t.skin.win} tex={castleWin} />

@@ -82,8 +82,11 @@ const HEDGE = BLOCK.lastIndexOf('g') + 1 // the garden's outer edge, where its h
 const WILD = 20
 // The whole map is a floating island: a disc around the rectangle of all of the above, RIM tiles wider than its
 // corners, with a stone wall round its edge, a strip of grass inside the wall and nothing outside it. Past the far
-// sidewalk the houses go on north, east and south to that strip, and the forest west
+// sidewalk the town goes on to that strip, and the forest west: north, houses on lots two tiles square with an
+// alley one tile wide between them; east and south, blocks of flats on lots five tiles square, streets two wide
 const RIM = 3
+export const LOT = { house: 2, block: 5 }
+const STREET = { house: 1, block: 2 }
 
 export type RoomIn = { id: string; title: string; count: number; locked?: boolean }
 export type Slot = { x: number; z: number; rot: number } // a point on a wall surface, rot faces into the room
@@ -91,6 +94,7 @@ export type Slot = { x: number; z: number; rot: number } // a point on a wall su
 export type Post = { x: number; z: number; r: number }
 export type Prop = { kind: 'tree' | 'oak' | 'lamp' | 'sakura' | 'statue' | 'light'; x: number; z: number; s?: number } // s: scale
 export type Rect = [number, number, number, number] // center x, center z, size x, size z; world units
+export type Lot = { x0: number; z0: number; kind: keyof typeof LOT }
 type Box = { x0: number; x1: number; z0: number; z1: number }
 export type Layout = {
   // rows[tz - z0][tx - x0]: SOLID tiles, '.' floor, 'L' lobby, 'D' doorway, 'C' column, 'E' elevator shaft,
@@ -114,6 +118,8 @@ export type Layout = {
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
   // the island the ground floor stands on: its middle and the radius of the wall round its edge; world units
   island?: { x: number; z: number; r: number }
+  // the town's building lots, each a square of solid tiles x0..x0+size-1, z0..; their buildings are drawn by City
+  lots?: Lot[]
   // the shrine's hall, the z of its torii and where its lanterns stand; world units
   shrine?: { x: number; z: number; w: number; d: number; gate: number; lanterns: { x: number; z: number }[] }
   // the keep's west face x, center z, width along z and depth along x; and the round towers on the building's
@@ -219,6 +225,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   // is (tx, tz) out in front of the door, give or take `spare` rows?
   const byDoor = (tx: number, tz: number, spare = 0) => tx < 0 && tz >= 6 - spare && tz <= 7 + spare
   const turrets = [box.x0, box.x1 + 1].flatMap((tx) => [box.z0, box.z1 + 1].map((tz) => ({ x: tx * TILE, z: tz * TILE })))
+  const zone = new Map<string, Lot['kind']>(), lots: Lot[] = [] // the town's tiles by kind of lot, then its lots
+  const mod = (v: number, k: number) => ((v % k) + k) % k
   if (ground) {
     fill(2, 2, 2, 4, 'R') // reception desk, on your left as you come in
     fill(0, 0, 6, 7, 'D') // double door from the core
@@ -233,9 +241,33 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
         else if (d > 0 && d <= FAR) set(tx, tz, c !== 'g' ? c : byDoor(tx, tz) ? 'p' : d === HEDGE && !byDoor(tx, tz, 1) ? 'h' : c)
         // the forest, thick along the wall
         else if (w > FAR) set(tx, tz, edge < RIM + 2.5 || noise(tx, tz) < 0.4 ? 'T' : 'g')
-        else if (d > FAR) set(tx, tz, tx % 3 && tz % 3 ? '#' : 's') // houses two tiles square, alleys between
+        else if (d > FAR) { // the town (see LOT), its lots counted out from the far sidewalk, so the first row fronts it
+          const kind = n > FAR ? 'house' : 'block', k = LOT[kind] + STREET[kind], lot = (v: number) => mod(v, k) < LOT[kind]
+          const east = tx > site.x1 + FAR, [ex, ez] = kind === 'house' ? [tx - (site.x0 - FAR), site.z0 - FAR - 1 - tz]
+            : east ? [tx - (site.x1 + FAR + 1), tz - (site.z0 - FAR)] : [tx - (site.x0 - FAR), tz - (site.z1 + FAR + 1)]
+          zone.set(`${tx},${tz}`, kind)
+          set(tx, tz, lot(ex) && lot(ez) ? '#' : 's')
+        }
         // the shrine grounds are laid out below, over the forest
       }
+    }
+    // a lot is built on only if the island has room for all of it; the rest of a cut one is garden. A lot starts
+    // where its kind's solid tiles do, along x and along z
+    const solid = (tx: number, tz: number, kind: Lot['kind']) => get(tx, tz) === '#' && zone.get(`${tx},${tz}`) === kind
+    for (let tx = gx0; tx <= gx1; tx++) {
+      for (let tz = gz0; tz <= gz1; tz++) {
+        const kind = zone.get(`${tx},${tz}`), size = kind && LOT[kind]
+        if (!kind || !size || !solid(tx, tz, kind) || solid(tx - 1, tz, kind) || solid(tx, tz - 1, kind)) continue
+        const tiles = Array.from({ length: size * size }, (_, i) => [tx + (i % size), tz + Math.floor(i / size)])
+        if (tiles.every(([a, b]) => get(a, b) === '#' && zone.get(`${a},${b}`) === kind)) {
+          lots.push({ x0: tx, z0: tz, kind })
+          for (const [a, b] of tiles) zone.delete(`${a},${b}`)
+        }
+      }
+    }
+    for (const [key] of zone) {
+      const [tx, tz] = key.split(',').map(Number)
+      if (get(tx, tz) === '#') set(tx, tz, 'g')
     }
     // the core, in a garden where it leaves room; the entrance tower's roof is held up by two columns, one either
     // side of the front door
@@ -340,7 +372,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   for (const f of flags) post(f.x, f.z, FLAGPOLE)
   return {
     rows: grid.map((r) => r.join('')), x0: gx0, z0: gz0, footprint: box, props, rooms: out, posts,
-    island: { x: island.x * TILE, z: island.z * TILE, r: island.r * TILE },
+    island: { x: island.x * TILE, z: island.z * TILE, r: island.r * TILE }, lots,
     start: { x: (site.x0 - mid('o') + 0.5) * TILE, z: 7 * TILE }, // in the middle of the street, facing the door
     door: { x: (CORE_X0 + PORCH + 0.5) * TILE, z: 7 * TILE, w: 2 * TILE },
     entrance: {

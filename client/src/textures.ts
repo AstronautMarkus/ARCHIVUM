@@ -287,3 +287,120 @@ export const pennant = (w: number, h: number) => texture(w, h, (g) => {
   g.textBaseline = 'middle'
   g.fillText('A', w / 2, Math.min(w, h) / 2 + 1)
 })
+
+// the wall texture with a window painted on: one per tile and storey, kept clear of the cell's bottom quarter
+// so a short top band (parapet) shows plain wall. Arched, it's the castle's; with no wall, the window stands alone
+// on a transparent cell, to stick on anything
+export function withWindow(tex: THREE.Texture | null, arched = false) {
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')!
+  if (tex) g.drawImage(tex.image as HTMLImageElement, 0, 0, 128, 128)
+  // the opening, `i` px in from its frame: a rectangle, or one whose top is a half circle
+  const opening = (i: number) => {
+    g.beginPath()
+    if (arched) {
+      g.arc(64, 54, 30 - i, Math.PI, 0)
+      g.lineTo(94 - i, 94 - i)
+      g.lineTo(34 + i, 94 - i)
+    } else g.rect(34 + i, 24 + i, 60 - 2 * i, 70 - 2 * i)
+    g.fill()
+  }
+  g.fillStyle = '#2b2b30'
+  opening(0)
+  const glass = g.createLinearGradient(0, 28, 0, 90)
+  glass.addColorStop(0, '#9fc3e6')
+  glass.addColorStop(1, '#2d4f7a')
+  g.fillStyle = glass
+  opening(4)
+  g.fillStyle = '#2b2b30'
+  g.fillRect(62, 28, 4, 62)
+  g.fillRect(38, 56, 52, 4)
+  return new THREE.CanvasTexture(c)
+}
+
+// ---- the town ----
+
+// plaster, nearly white so each building's color tints it, a little uneven
+export const stucco = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#f1efe9'
+  g.fillRect(0, 0, 64, 64)
+  speckle(g, rand, 500, ['#e6e3dc', '#faf9f6', '#dedad2'])
+})
+
+// clay roof tiles in rows, each row's lower edge in shadow
+export const roofTiles = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#7a3420'
+  g.fillRect(0, 0, 64, 64)
+  for (let y = 0; y < 64; y += 8) {
+    for (let x = (y / 8) % 2 ? -4 : 0; x < 64; x += 8) {
+      g.fillStyle = pick(rand, ['#b5532f', '#a84a2a', '#c0613a', '#9c4325'])
+      g.fillRect(x, y, 7, 6)
+      g.fillStyle = '#d27a52'
+      g.fillRect(x + 1, y, 5, 1)
+    }
+  }
+})
+
+// a house's window with its shutters open either side, on transparency
+export const shutters = (color: string) => texture(32, 32, (g) => {
+  g.fillStyle = color
+  for (const x of [1, 24]) g.fillRect(x, 4, 7, 26)
+  g.fillStyle = 'rgba(0,0,0,0.25)'
+  for (const x of [1, 24]) for (let y = 7; y < 30; y += 4) g.fillRect(x, y, 7, 1)
+  g.fillStyle = '#ece8df'
+  g.fillRect(8, 3, 16, 28)
+  const glass = g.createLinearGradient(0, 5, 0, 29)
+  glass.addColorStop(0, '#9fc3e6')
+  glass.addColorStop(1, '#2d4f7a')
+  g.fillStyle = glass
+  g.fillRect(10, 5, 12, 24)
+  g.fillStyle = '#ece8df'
+  g.fillRect(15, 5, 2, 24)
+  g.fillRect(10, 15, 12, 2)
+})
+
+// a shop's front, one per 2 m of ground floor: a sign band, a big window with goods in it and a dark frame
+export const shopfront = () => texture(64, 96, (g, rand) => {
+  g.fillStyle = '#e9e4d8'
+  g.fillRect(0, 0, 64, 96)
+  g.fillStyle = '#3b2f2a'
+  g.fillRect(2, 8, 60, 14)
+  g.fillStyle = '#e9c46a'
+  for (let x = 6; x < 58; x += 6) g.fillRect(x, 13, 3, 4) // the letters of its name
+  g.fillStyle = '#2b2b30'
+  g.fillRect(4, 28, 56, 64)
+  const glass = g.createLinearGradient(0, 30, 0, 90)
+  glass.addColorStop(0, '#8fb3d6')
+  glass.addColorStop(1, '#25405f')
+  g.fillStyle = glass
+  g.fillRect(7, 31, 50, 58)
+  for (let i = 0; i < 9; i++) { // goods on the shelves
+    g.fillStyle = pick(rand, ['#c0392b', '#e9c46a', '#2a9d8f', '#f4a261', '#ffffff'])
+    g.fillRect(9 + Math.floor(rand() * 44), 64 + Math.floor(rand() * 18), 4, 6)
+  }
+})
+
+// a tower's glass curtain wall, 2 m by one storey: sky-blue panes with a sheen, in a dark grid
+export const curtain = () => texture(64, 96, (g, rand) => {
+  g.fillStyle = '#26303c'
+  g.fillRect(0, 0, 64, 96)
+  for (const x of [2, 33]) {
+    const glass = g.createLinearGradient(x, 0, x + 30, 96)
+    glass.addColorStop(0, '#a9c6e0')
+    glass.addColorStop(0.5, '#5d88b3')
+    glass.addColorStop(1, '#2f5277')
+    g.fillStyle = glass
+    g.fillRect(x, 2, 29, 82)
+  }
+  g.fillStyle = '#3c4a58' // the spandrel at the floor line
+  g.fillRect(0, 86, 64, 10)
+  speckle(g, rand, 60, ['rgba(255,255,255,0.25)'], 2, 2, 60, 80)
+})
+
+// light concrete, for slabs, cornices and rooftops
+export const concrete = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#bdb8ae'
+  g.fillRect(0, 0, 64, 64)
+  speckle(g, rand, 700, ['#aea99f', '#c9c5bc', '#a49f95'])
+})
