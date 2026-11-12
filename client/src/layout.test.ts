@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBuilding, buildFloor, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, LIFTS, SOLID, SPAWN, TILE, TORII,
+  buildBuilding, buildFloor, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
 } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
@@ -170,7 +170,8 @@ test('real windows at both ends of every floor, every other tile, only where the
   for (const l of [g, up]) {
     const f = l.footprint, at = (tx: number, tz: number) => tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE)
     for (let tz = 0; tz <= 13; tz++) {
-      assert.equal(at(f.x1, tz) === 'W', (f.x1 + tz) % 2 === 1, 'east end')
+      const keep = tz >= KEEP.tz0 && tz <= KEEP.tz1 // the keep stands against the east wall there
+      assert.equal(at(f.x1, tz) === 'W', (f.x1 + tz) % 2 === 1 && !keep, 'east end')
       const open = l === up || 'ghpT'.includes(at(f.x0 - 1, tz))
       assert.equal(at(f.x0, tz) === 'W', open && tz % 2 === 1, 'west end')
       // you step into the bay, but not out through its glass
@@ -191,4 +192,16 @@ test('a PIN room has its door in the doorway, with wall beside it for the keypad
     assert.equal(tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), 'D')
     assert.ok(solidAt(l, (tx + 1.5) * TILE, (tz + 0.5) * TILE))
   }
+})
+
+test('the castle: a keep against the middle of the east wall and a round tower on each corner, all solid', () => {
+  const [g, up] = buildBuilding([rooms([2, 3, 1]), rooms([])])
+  const f = g.footprint, k = g.keep!
+  assert.equal(k.x, (f.x1 + 1) * TILE)
+  assert.equal(k.z, 7 * TILE, 'on the entrance axis')
+  for (let x = k.x + 0.1; x < k.x + k.d; x += 0.5) for (let z = k.z - k.w / 2 + 0.1; z < k.z + k.w / 2; z += 0.5) assert.ok(solidAt(g, x, z))
+  assert.ok(!g.props.some((p) => p.x > k.x && p.x < k.x + k.d && Math.abs(p.z - k.z) < k.w / 2), 'no tree grows in it')
+  assert.equal(g.turrets!.length, 4)
+  for (const t of g.turrets!) for (const [a, b] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) assert.ok(solidAt(g, t.x + a * 1.5, t.z + b * 1.5))
+  assert.ok(reachableAll(g) && reachableAll(up))
 })

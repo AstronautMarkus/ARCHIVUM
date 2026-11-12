@@ -90,6 +90,41 @@ export const cantera = () => texture(64, 64, (g, rand) => {
   }
 })
 
+// pale castle stone in big ashlar blocks, 1 m x 0.5 m, each lit along its top, over darker joints: the castle's outside
+export const ashlar = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#a69e90'
+  g.fillRect(0, 0, 64, 64)
+  for (let y = 0; y < 64; y += 16) {
+    for (let x = y % 32 ? 16 : 0; x < 64; x += 32) {
+      const color = pick(rand, ['#dcd6c9', '#d4cdbf', '#e0dbcf', '#cfc8ba'])
+      for (const wrap of [0, -64]) { // the block hanging off the right edge comes back in on the left
+        g.fillStyle = color
+        g.fillRect(x + wrap, y, 31, 15)
+        g.fillStyle = '#ebe7dd'
+        g.fillRect(x + wrap, y, 31, 1)
+        g.fillStyle = '#bfb7a8'
+        g.fillRect(x + wrap, y + 14, 31, 1)
+      }
+    }
+  }
+  speckle(g, rand, 600, ['#c7bfb0', '#e4dfd5', '#b9b1a2'])
+})
+
+// a slate roof: rows of blue-grey shingles, each overlapping the row below, its lower edge in shadow
+export const slate = () => texture(64, 64, (g, rand) => {
+  g.fillStyle = '#232c3b'
+  g.fillRect(0, 0, 64, 64)
+  for (let y = 0; y < 64; y += 8) {
+    for (let x = (y / 8) % 2 ? -4 : 0; x < 64; x += 8) {
+      g.fillStyle = pick(rand, ['#4a5a75', '#435270', '#51627e', '#3e4c66'])
+      g.fillRect(x, y, 7, 7)
+      g.fillStyle = '#5f7090'
+      g.fillRect(x, y, 7, 1)
+    }
+  }
+  speckle(g, rand, 150, ['#36425a', '#5a6b88'])
+})
+
 // a dark gallery ceiling crossed by two beams, each lit along one edge
 function paintCeiling(g: CanvasRenderingContext2D, rand: Rand) {
   g.fillStyle = '#28282c'

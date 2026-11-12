@@ -57,6 +57,10 @@ export const CORE_X0 = -CORE[0].length, CORE_Z0 = -2
 // z: center, w: width along z, door: width of the opening, which leaves room on both sides for the open doors to
 // slide away
 export const LIFTS = [4, 8].map((tz0) => ({ tx: 6, tz0, tz1: tz0 + 1, x0: 6 * TILE, z: (tz0 + 1) * TILE, w: 2 * TILE, door: 1.6 }))
+// the keep: the castle's tall tower, against the middle of the building's east wall on the entrance axis, across
+// rows KEEP.tz0..tz1 and KEEP.d tiles out into the garden. It rises to keepLevel storeys, always well over the roof
+export const KEEP = { tz0: 5, tz1: 8, d: 3 }
+export const keepLevel = (floors: number) => Math.max(floors + 6, 12)
 const ROOM_W = 5
 // rows of the ring: corridor 0-1, arcade 2, courtyard 3-10, arcade 11, corridor 12-13
 const RING_END = 13, COURT_Z0 = 3, COURT_Z1 = 10, LOBBY_X1 = 5, COURT_X0 = 7
@@ -94,6 +98,10 @@ export type Layout = {
   court?: { x0: number; x1: number; z0: number; z1: number; fountain: { x: number; z: number } }
   // the shrine's hall, the z of its torii and where its lanterns stand; world units
   shrine?: { x: number; z: number; w: number; d: number; gate: number; lanterns: { x: number; z: number }[] }
+  // the keep's west face x, center z, width along z and depth along x; and the round towers on the building's
+  // corners, by their centers; world units
+  keep?: { x: number; z: number; w: number; d: number }
+  turrets?: { x: number; z: number }[]
   // columns, tree trunks, lamp posts, statues...: at most one per tile and wholly inside it, keyed `${tx},${tz}`
   posts: Map<string, Post>
 }
@@ -181,6 +189,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
   const away = (tx: number, tz: number) => [Math.max(site.x0 - tx, tx - site.x1), Math.max(site.z0 - tz, tz - site.z1)]
   // is (tx, tz) out in front of the door, give or take `spare` rows?
   const byDoor = (tx: number, tz: number, spare = 0) => tx < 0 && tz >= 6 - spare && tz <= 7 + spare
+  const turrets = [box.x0, box.x1 + 1].flatMap((tx) => [box.z0, box.z1 + 1].map((tz) => ({ x: tx * TILE, z: tz * TILE })))
   if (ground) {
     fill(2, 2, 2, 4, 'R') // reception desk, on your left as you come in
     fill(0, 0, 6, 7, 'D') // double door from the core
@@ -201,13 +210,24 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     fill(CORE_X0, -1, site.z0, site.z1, 'g')
     CORE.forEach((row, i) => [...row].forEach((c, j) => set(CORE_X0 + j, CORE_Z0 + i, c === '*' ? '#' : c)))
     for (const tz of [6, 8]) post(CORE_X0 * TILE + PORTICO, tz * TILE, SHAFT)
+    // the castle: a round tower on each corner of the building, standing half out in the garden (but never in the
+    // core's, which doesn't change), and the keep against the middle of its east wall
+    const core = (tx: number, tz: number) => tx >= CORE_X0 && tx < 0 && tz >= CORE_Z0 && tz < CORE_Z0 + CORE.length
+    for (const { x, z } of turrets) {
+      for (const tx of [x / TILE - 1, x / TILE]) {
+        for (const tz of [z / TILE - 1, z / TILE]) if (!core(tx, tz) && 'pgT'.includes(grid[tz - z0][tx - x0])) set(tx, tz, 'H')
+      }
+    }
+    fill(box.x1 + 1, box.x1 + KEEP.d, KEEP.tz0, KEEP.tz1, 'H')
   }
   // real windows in the outer walls of the lobby and the east corridor, every other tile, wherever there's open air
-  // outside (downstairs the core stands against most of the lobby): a bay you step into to look out. Upstairs the
-  // glass is the edge of the map; downstairs a hedge outside it keeps you from walking through
+  // outside (downstairs the core stands against most of the lobby, and the keep against the east corridor's
+  // middle all the way up): a bay you step into to look out. Upstairs the glass is the edge of the map; downstairs
+  // a hedge outside it keeps you from walking through
   for (const [tx, out] of [[box.x0, -1], [box.x1, 1]]) {
     for (let tz = 0; tz <= RING_END; tz++) {
-      if (!((tx + tz) & 1) || (ground && !'gpT'.includes(grid[tz - z0][tx + out - x0]))) continue
+      if (!((tx + tz) & 1) || (out > 0 && tz >= KEEP.tz0 && tz <= KEEP.tz1)) continue
+      if (ground && !'gpT'.includes(grid[tz - z0][tx + out - x0])) continue
       set(tx, tz, 'W')
       if (ground) set(tx + out, tz, 'h')
     }
@@ -256,7 +276,7 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
     for (let tz = z0; tz <= z1; tz++) {
       const [dx, dz] = away(tx, tz), d = Math.max(dx, dz), n = (((tx + tz) % 12) + 12) % 12
       if (dx === garden && dz === garden) props.push(prop('statue', tx, tz))
-      else if (!byDoor(tx, tz, 2) && d === garden && n % 3 === 0) set(tx, tz, 'T')
+      else if (!byDoor(tx, tz, 2) && d === garden && n % 3 === 0 && grid[tz - z0][tx - x0] === 'g') set(tx, tz, 'T')
       else if (!byDoor(tx, tz, 2) && d === NEAR && n % 4 === 0) props.push(prop('lamp', tx, tz))
       // a tree on every tree tile, of either kind, some bigger than others
       if (grid[tz - z0][tx - x0] === 'T') {
@@ -293,6 +313,8 @@ export function buildFloor(rooms: RoomIn[], opts: Options = {}): Layout {
       fountain: { x: (mx + 1) * TILE, z: (mz + 1) * TILE },
     },
     shrine: { x: cx, z: (sz + 5) * TILE, w: 4 * TILE, d: 2 * TILE, gate: gateZ, lanterns },
+    keep: { x: (box.x1 + 1) * TILE, z: ((KEEP.tz0 + KEEP.tz1 + 1) / 2) * TILE, w: (KEEP.tz1 - KEEP.tz0 + 1) * TILE, d: KEEP.d * TILE },
+    turrets,
   }
 }
 

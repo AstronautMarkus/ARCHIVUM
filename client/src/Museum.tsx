@@ -4,11 +4,11 @@ import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
-  buildBuilding, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TILE, TORII, WALL_H,
+  buildBuilding, keepLevel, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
 import { fileUrl, floorColor, isUnlocked, lockRoom, type Exhibit, type Floor, type Museum } from './api'
-import { cantera, ceiling, checker, hedge, limestone, pennant, railing, spots, whiteBrick } from './textures'
+import { ashlar, cantera, ceiling, checker, hedge, limestone, pennant, railing, slate, spots, whiteBrick } from './textures'
 import core from './core.json'
 
 const EYE = 1.6
@@ -17,6 +17,7 @@ const HAZE = '#9fd0f5' // sky at the horizon; outdoor fog fades into it
 const DARK = new THREE.Color('#000')
 const STOREY = WALL_H // one floor seen from outside
 const PARAPET = 0.9 // how far the walls around the roof rise above it
+const MERLON = 0.7 // how tall the merlons of the castle's battlements stand on its parapets
 const BEAM = 0.4 // the edge of a floor's slab, seen from the courtyard
 const SPRING = 2.1 // how high above its floor an arch of the courtyard arcade springs from its columns
 const ARCH = 0.5 // how thick the arches are
@@ -179,19 +180,30 @@ function makeSky() {
 }
 
 // the wall texture with a window painted on: one per tile and storey, kept clear of the cell's bottom quarter
-// so a short top band (parapet) shows plain wall
-function withWindow(tex: THREE.Texture) {
+// so a short top band (parapet) shows plain wall. Arched, it's the castle's; with no wall, the window stands alone
+// on a transparent cell, to stick on anything
+function withWindow(tex: THREE.Texture | null, arched = false) {
   const c = document.createElement('canvas')
   c.width = c.height = 128
   const g = c.getContext('2d')!
-  g.drawImage(tex.image as HTMLImageElement, 0, 0, 128, 128)
+  if (tex) g.drawImage(tex.image as HTMLImageElement, 0, 0, 128, 128)
+  // the opening, `i` px in from its frame: a rectangle, or one whose top is a half circle
+  const opening = (i: number) => {
+    g.beginPath()
+    if (arched) {
+      g.arc(64, 54, 30 - i, Math.PI, 0)
+      g.lineTo(94 - i, 94 - i)
+      g.lineTo(34 + i, 94 - i)
+    } else g.rect(34 + i, 24 + i, 60 - 2 * i, 70 - 2 * i)
+    g.fill()
+  }
   g.fillStyle = '#2b2b30'
-  g.fillRect(34, 24, 60, 70)
+  opening(0)
   const glass = g.createLinearGradient(0, 28, 0, 90)
   glass.addColorStop(0, '#9fc3e6')
   glass.addColorStop(1, '#2d4f7a')
   g.fillStyle = glass
-  g.fillRect(38, 28, 52, 62)
+  opening(4)
   g.fillStyle = '#2b2b30'
   g.fillRect(62, 28, 4, 62)
   g.fillRect(38, 56, 52, 4)
@@ -208,9 +220,11 @@ const OUTDOOR = 'osgpT' // tiles under the open sky
 function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
   layouts: Layout[]; colors: string[]; byRoom: Map<string, Exhibit[]>; quiet: boolean; current: number; view: View; onChanged: () => void
 }) {
-  // the museum is a white gallery with a stone arcade (see textures.ts); Freedoom's art is for the city, the street,
-  // the shrine and the elevator
-  const [wall, lobby, ceil, spot, stone, iron, leaves] = useMemo(() => [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing(), hedge()], [])
+  // the museum is a white gallery with a stone arcade inside a castle of pale ashlar under slate roofs (see
+  // textures.ts); Freedoom's art is for the city, the street, the shrine and the elevator
+  const [wall, lobby, ceil, spot, stone, iron, leaves, castle, roof] = useMemo(() =>
+    [whiteBrick(), limestone(), ceiling(), spots(), cantera(), railing(), hedge(), ashlar(), slate()], [])
+  const [castleWin, arch, banner, flag] = useMemo(() => [withWindow(castle, true), withWindow(null, true), pennant(16, 48), pennant(32, 20)], [castle])
   const palette = colors.join()
   const marble = useMemo(() => colors.map(checker), [palette]) // one floor pattern per storey, in its own color
   const [lite, facade, street, sidewalk, door, grass, cobbles, wood, metal, panel, plate, steel,
@@ -223,7 +237,7 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
   ])
   useMemo(() => water.forEach((t) => retro(t)), [water])
   const bricks = [pbrick, brick, brick1, stwall]
-  const [wallWin, ...brickWin] = useMemo(() => [wall, pbrick, brick, brick1, stwall].map(withWindow), [wall, pbrick, brick, brick1, stwall])
+  const brickWin = useMemo(() => [pbrick, brick, brick1, stwall].map((b) => withWindow(b)), [pbrick, brick, brick1, stwall])
   const ground = layouts[0]
   const top = layouts.length * STOREY + PARAPET // the museum is as tall as its floors, plus a parapet
   const near = (k: number) => Math.abs(k - current) <= 1
@@ -353,7 +367,18 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
       i, h: CITY[i][0] * STOREY + 0.5, brick: CITY[i][1], win: cells.filter(odd), plain: cells.filter((c) => !odd(c)),
     }))
     const deskZ = t.desk.reduce((s, [, tz]) => s + (tz + 0.5) * TILE, 0) / (t.desk.length || 1)
-    return { ...t, skin, city, deskZ, cornice }
+    // battlements: a merlon a meter long in the middle of every tile of both parapets, the outer one and the one
+    // around the courtyard, each in its parapet's stone
+    const crenellate = (boxes: Box[]) => boxes.map(([x, y, z, sx, sy, sz]): Box =>
+      [x, y + sy / 2 + MERLON / 2, z, sx > sz ? 1 : sx, MERLON, sx > sz ? sz : 1])
+    const merlons = { out: crenellate(skin.parapet), court: crenellate(t.parapet) }
+    // banners hanging from the roof down the long sides, on every other plain tile, clear of the corner towers and
+    // just out past the cornices
+    const banners = [f.z0 * TILE - 0.4, (f.z1 + 1) * TILE + 0.4].flatMap((z, side) =>
+      Array.from({ length: f.x1 - f.x0 - 3 }, (_, i) => f.x0 + 2 + i)
+        .filter((tx) => !odd([tx, side ? f.z1 : f.z0]) && (tx - f.x0) % 4 < 2)
+        .map((tx) => ({ x: (tx + 0.5) * TILE, z, rot: side ? 0 : Math.PI })))
+    return { ...t, skin, city, deskZ, cornice, merlons, banners }
   }, [layouts, top, ground])
 
   return (
@@ -367,9 +392,11 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
       ))}
       <group name="walls">
         <WallSet cells={t.inner} tex={wall} height={WALL_H} />
-        <Boxes boxes={t.skin.win} tex={wallWin} />
-        <Boxes boxes={t.skin.plain} tex={wall} />
-        <Boxes boxes={t.skin.parapet} tex={wall} repeat={[1, PARAPET / STOREY]} />
+        <Boxes boxes={t.skin.win} tex={castleWin} />
+        <Boxes boxes={t.skin.plain} tex={castle} />
+        <Boxes boxes={t.skin.parapet} tex={castle} repeat={[1, PARAPET / STOREY]} />
+        <Boxes boxes={t.merlons.out} tex={castle} repeat={[0.5, MERLON / STOREY]} />
+        <Boxes boxes={t.merlons.court} tex={stone} repeat={[0.5, MERLON / TILE]} />
         <Columns cells={t.columns} tex={stone} />
         <Arches spans={t.arches} tex={stone} />
         <Boxes boxes={t.rails} tex={iron} cut />
@@ -384,6 +411,20 @@ function World({ layouts, colors, byRoom, quiet, current, view, onChanged }: {
         <Slants cells={t.slants} tex={{ wall, floor: lobby, ceiling: ceil, roof: stone }} />
       </group>
       <Panes panes={t.panes} />
+      {/* the castle around the museum: a round tower on each corner, the keep at the back, banners down the sides */}
+      {ground.turrets?.map((at) => <Turret key={`${at.x},${at.z}`} at={at} height={top + STOREY} tex={{ wall: castleWin, trim: stone, roof, flag }} />)}
+      {ground.keep && (
+        <Keep at={ground.keep} level={keepLevel(layouts.length)} above={top} tex={{ wall: castle, win: castleWin, arch, trim: stone, roof, flag }} />
+      )}
+      {t.banners.map((b) => {
+        const h = Math.min(4.2, top - PARAPET - 0.7) // from just under the roof, never down to the ground
+        return (
+          <mesh key={`${b.x},${b.z}`} position={[b.x, top - PARAPET - 0.2 - h / 2, b.z]} rotation-y={b.rot}>
+            <planeGeometry args={[1.2, h]} />
+            <meshBasicMaterial map={banner} />
+          </mesh>
+        )
+      })}
       <WallSet cells={t.hedges} tex={leaves} height={1} />
       {/* grass on to the horizon under the edges of the map */}
       <mesh rotation-x={-Math.PI / 2} position-y={-0.05}>
@@ -498,7 +539,28 @@ function TileSet({ cells, tex, y = 0.005 }: { cells: Cell[]; tex: THREE.Texture;
 // at: floor it's at (fractional while moving); target: floor it's going to; doors: 0 shut .. 1 open;
 // v: speed in floors per second; still: seconds since it shut its doors or arrived, for the pauses in between
 const cars = LIFTS.map(() => ({ at: 0, target: 0, doors: 0, v: 0, still: 1 }))
-const GLASS = { color: HAZE, transparent: true, opacity: 0.18, depthWrite: false, side: THREE.DoubleSide }
+// see-through glass in the painted windows' style (withWindow): a dark frame and cross bars around a blue tint,
+// paler at the top, one pane per tile
+function glassPane() {
+  const c = document.createElement('canvas')
+  c.width = c.height = 128
+  const g = c.getContext('2d')!
+  g.fillStyle = '#2b2b30'
+  g.fillRect(0, 0, 128, 128)
+  g.clearRect(4, 4, 120, 120)
+  const tint = g.createLinearGradient(0, 4, 0, 124)
+  tint.addColorStop(0, 'rgba(159, 195, 230, 0.2)')
+  tint.addColorStop(1, 'rgba(45, 79, 122, 0.4)')
+  g.fillStyle = tint
+  g.fillRect(4, 4, 120, 120)
+  g.fillStyle = '#2b2b30'
+  g.fillRect(62, 4, 4, 120)
+  g.fillRect(4, 62, 120, 4)
+  const t = new THREE.CanvasTexture(c)
+  retro(t, true)
+  return t
+}
+const GLASS = { map: glassPane(), transparent: true, depthWrite: false, side: THREE.DoubleSide }
 
 type LiftTextures = Record<'stone' | 'metal' | 'lamp' | 'panel' | 'plate' | 'steel', THREE.Texture>
 
@@ -536,7 +598,9 @@ function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (
   // the right leaf shows the door picture flipped, so the pair meets in the middle like real elevator doors
   const leaf = useTiled(tex.metal), flipped = useTiled(tex.metal, -1)
   const wallTex = useTiled(tex.panel, 2), frontTex = useTiled(tex.plate), floorTex = useTiled(tex.steel, 1, 2)
-  const lampTex = useTiled(tex.lamp, 1, 2)
+  const lampTex = useTiled(tex.lamp, 1, 2), pitTex = useTiled(tex.stone, 1, w / TILE)
+  // a pane of glass per tile and storey up the shaft, and per tile across the car's back
+  const shaftSide = useTiled(GLASS.map, 1, floors), shaftBack = useTiled(GLASS.map, w / TILE, floors), carBack = useTiled(GLASS.map, w / TILE)
   const leafMesh = (i: number, x: number) => (
     <mesh ref={leaves[i]} position={[x, DOOR_H / 2, z + ((i % 2 ? 1 : -1) * leafW) / 2]}>
       <boxGeometry args={[0.06, DOOR_H, leafW]} />
@@ -546,12 +610,14 @@ function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (
   return (
     <>
       <Boxes boxes={frame} tex={tex.stone} />
+      {/* the bottom of the shaft, in the frame's stone but shaded, so with the car away it reads as a pit, not grass */}
+      <mesh position={[cx, 0.01, z]}><boxGeometry args={[TILE, 0.02, w]} /><meshBasicMaterial map={pitTex} color="#8a8a8a" /></mesh>
       <Boxes boxes={landings.left} tex={tex.metal} />
       <Boxes boxes={landings.right} tex={tex.metal} repeat={[-1, 1]} />
       {[[cx, z - w / 2, 0, TILE], [cx, z + w / 2, 0, TILE], [x0 + TILE, z, Math.PI / 2, w]].map(([x, zz, r, width], i) => (
         <mesh key={i} position={[x, H / 2, zz]} rotation-y={r}>
           <planeGeometry args={[width, H]} />
-          <meshBasicMaterial {...GLASS} />
+          <meshBasicMaterial {...GLASS} map={i < 2 ? shaftSide : shaftBack} />
         </mesh>
       ))}
       {/* the car: steel walls, a lit ceiling, a glass back onto the courtyard, and its doors */}
@@ -574,7 +640,7 @@ function Elevator({ i, floors, near, tex }: { i: number; floors: number; near: (
             <meshBasicMaterial map={frontTex} />
           </mesh>
         ))}
-        <mesh position={[x0 + TILE - 0.08, 1.55, z]}><boxGeometry args={[0.04, 3, w - 0.1]} /><meshBasicMaterial {...GLASS} /></mesh>
+        <mesh position={[x0 + TILE - 0.08, 1.55, z]}><boxGeometry args={[0.04, 3, w - 0.1]} /><meshBasicMaterial {...GLASS} map={carBack} /></mesh>
         {leafMesh(0, x0 + 0.13)}
         {leafMesh(1, x0 + 0.13)}
       </group>
@@ -736,11 +802,14 @@ function Entrance({ at, tex }: { at: NonNullable<Layout['entrance']>; tex: Recor
     [x + (1.4 + d) / 2, STOREY - 0.15, z, d - 1.4, 0.3, porch], // the balcony
   ], [x, z, w, d, mid, depth, porch])
   const rail = useMemo((): Box[] => [[x + 1.4, STOREY + 0.5, z, 0.06, 1, porch]], [x, z, porch])
+  // battlements along the edge of the crowning cornice, like the castle's
+  const crown = useMemo(() => battlements(mid - 0.4 - depth / 2, mid + 0.2 + depth / 2, z - w / 2 - 0.3, z + w / 2 + 0.3, TOWER + 0.2), [mid, depth, z, w])
   return (
     <>
       <Boxes boxes={piers} tex={tex.stone} repeat={[1, OPEN / TILE]} />
       <Boxes boxes={trim} tex={tex.trim} />
       <Boxes boxes={rail} tex={tex.iron} cut />
+      <Boxes boxes={crown} tex={tex.stone} repeat={[0.5, MERLON / TILE]} />
       {/* the block over the porch: windows on its front, plain stone elsewhere, the porch's ceiling underneath */}
       <mesh position={[mid, (OPEN + TOWER) / 2, z]}>
         <boxGeometry args={[depth, TOWER - OPEN, w]} />
@@ -775,12 +844,13 @@ function Entrance({ at, tex }: { at: NonNullable<Layout['entrance']>; tex: Recor
   )
 }
 
-// a flagpole with a gilt ball on top and its flag flying toward +z, a wave running down it from the pole
-function Flag({ at, tex }: { at: { x: number; z: number }; tex: THREE.Texture }) {
+// a flagpole with a gilt ball on top and its flag flying toward +z, a wave running down it from the pole; flags
+// in different places wave out of step
+function Flag({ at, tex, phase = at.z }: { at: { x: number; z: number }; tex: THREE.Texture; phase?: number }) {
   const geometry = useMemo(() => new THREE.PlaneGeometry(1.8, 1.1, 8, 1).translate(0.9, 0, 0), [])
   useFrame(({ clock }) => {
     const p = geometry.attributes.position as THREE.BufferAttribute
-    for (let i = 0; i < p.count; i++) p.setZ(i, Math.sin(p.getX(i) * 3 - clock.elapsedTime * 4 + at.z) * 0.08 * p.getX(i))
+    for (let i = 0; i < p.count; i++) p.setZ(i, Math.sin(p.getX(i) * 3 - clock.elapsedTime * 4 + phase) * 0.08 * p.getX(i))
     p.needsUpdate = true
   })
   return (
@@ -789,6 +859,106 @@ function Flag({ at, tex }: { at: { x: number; z: number }; tex: THREE.Texture })
       <mesh position-y={7.05}><sphereGeometry args={[0.1, 6, 4]} /><meshBasicMaterial color={GILT} /></mesh>
       <mesh geometry={geometry} position-y={6.35} rotation-y={-Math.PI / 2}><meshBasicMaterial map={tex} side={THREE.DoubleSide} /></mesh>
     </group>
+  )
+}
+
+// merlons a meter long standing on y around the edge of a rectangle (world x0..x1, z0..z1), about one every 2 m
+// along each side, t thick
+function battlements(x0: number, x1: number, z0: number, z1: number, y: number, t = 0.3): Box[] {
+  const nx = Math.max(1, Math.round((x1 - x0) / 2)), nz = Math.max(1, Math.round((z1 - z0) / 2)), my = y + MERLON / 2
+  return [
+    ...Array.from({ length: nx }, (_, i) => x0 + ((i + 0.5) * (x1 - x0)) / nx).flatMap((x): Box[] => [[x, my, z0 + t / 2, 1, MERLON, t], [x, my, z1 - t / 2, 1, MERLON, t]]),
+    ...Array.from({ length: nz }, (_, i) => z0 + ((i + 0.5) * (z1 - z0)) / nz).flatMap((z): Box[] => [[x0 + t / 2, my, z, t, MERLON, 1], [x1 - t / 2, my, z, t, MERLON, 1]]),
+  ]
+}
+
+// a pointed roof: a cone (n sides, rotated so a square one sits square) r across and h tall, standing on y, in slate,
+// with a gilt ball on its tip; `scale` stretches it to fit a base that isn't round or square
+function Spire({ y, r, h, n = 16, scale = [1, 1], tex }: { y: number; r: number; h: number; n?: number; scale?: [number, number]; tex: THREE.Texture }) {
+  const map = useTiled(tex, n === 4 ? 16 : 6, Math.max(2, Math.round(h / 1.5)))
+  // turned in the geometry, so the scale stretches it along x and z
+  const geometry = useMemo(() => new THREE.ConeGeometry(r, h, n, 1, true).rotateY(n === 4 ? Math.PI / 4 : 0), [r, h, n])
+  return (
+    <>
+      <mesh geometry={geometry} position-y={y + h / 2} scale={[scale[0], 1, scale[1]]}>
+        <meshBasicMaterial map={map} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh position-y={y + h + 0.1}><sphereGeometry args={[0.18, 8, 6]} /><meshBasicMaterial color={GILT} /></mesh>
+    </>
+  )
+}
+
+// A round tower on a corner of the castle, a storey taller than the building, windows all the way up; a ring of
+// corbels carries a slate cone with a pennant flying from its tip
+const TURRET = 1.9 // its radius: it fits in the corner's wall and the garden tiles around it, which it blocks
+function Turret({ at, height, tex }: { at: { x: number; z: number }; height: number; tex: Record<'wall' | 'trim' | 'roof' | 'flag', THREE.Texture> }) {
+  const wall = useTiled(tex.wall, 6, height / STOREY) // a window every 2 m around and every storey up, like the walls
+  return (
+    <group position={[at.x, 0, at.z]}>
+      <mesh position-y={height / 2}><cylinderGeometry args={[TURRET, TURRET, height, 18, 1, true]} /><meshBasicMaterial map={wall} /></mesh>
+      <mesh position-y={height + 0.3}><cylinderGeometry args={[TURRET + 0.35, TURRET, 0.6, 18]} /><meshBasicMaterial map={tex.trim} /></mesh>
+      <Spire y={height + 0.6} r={TURRET + 0.6} h={5.5} tex={tex.roof} />
+      <group position-y={height + 5} scale={0.45}><Flag at={{ x: 0, z: 0 }} phase={at.x + at.z} tex={tex.flag} /></group>
+    </group>
+  )
+}
+
+// The keep: the castle's tall tower at the back, on the entrance axis, `level` storeys up. A plain stone shaft with
+// an arched window every other storey on each side (on the west one only over the building's roof, `above`); at
+// the top a gallery on corbels with battlements runs round a room windowed all round, under a tall slate roof
+// with a pennant, and a little turret hangs off each corner of the gallery
+function Keep({ at, level, above, tex }: {
+  at: NonNullable<Layout['keep']>; level: number; above: number; tex: Record<'wall' | 'win' | 'arch' | 'trim' | 'roof' | 'flag', THREE.Texture>
+}) {
+  const { x, z, w, d } = at, H = level * STOREY, cx = x + d / 2, [n, s] = [z - w / 2, z + w / 2], g = 0.6 // gallery overhang
+  const across = useTiled(tex.wall, w / TILE, H / TILE), along = useTiled(tex.wall, d / TILE, H / TILE) // faces ±x, ±z
+  const roomAcross = useTiled(tex.win, w / TILE), roomAlong = useTiled(tex.win, d / TILE)
+  const parts = useMemo(() => {
+    const windows: Box[] = [], corbels: Box[] = []
+    for (let k = 1; k < level; k += 2) {
+      const y = (k + 0.5) * STOREY
+      windows.push([cx, y, n - 0.03, TILE, STOREY, 0.04], [cx, y, s + 0.03, TILE, STOREY, 0.04])
+      for (const dz of [-TILE, TILE]) {
+        windows.push([x + d + 0.03, y, z + dz, 0.04, STOREY, TILE])
+        if (y - STOREY / 2 > above) windows.push([x - 0.03, y, z + dz, 0.04, STOREY, TILE])
+      }
+    }
+    for (let i = 0.5; i < d; i++) corbels.push([x + i, H - 0.95, n - 0.3, 0.3, 0.5, 0.6], [x + i, H - 0.95, s + 0.3, 0.3, 0.5, 0.6])
+    for (let i = 0.5; i < w; i++) corbels.push([x - 0.3, H - 0.95, n + i, 0.6, 0.5, 0.3], [x + d + 0.3, H - 0.95, n + i, 0.6, 0.5, 0.3])
+    const [x0, x1, z0, z1] = [x - g, x + d + g, n - g, s + g]
+    const wall: Box[] = [ // the gallery's low wall, and its merlons on top
+      [cx, H + 0.3, z0 + 0.12, x1 - x0, 0.6, 0.24], [cx, H + 0.3, z1 - 0.12, x1 - x0, 0.6, 0.24],
+      [x0 + 0.12, H + 0.3, z, 0.24, 0.6, z1 - z0], [x1 - 0.12, H + 0.3, z, 0.24, 0.6, z1 - z0],
+      ...battlements(x0, x1, z0, z1, H + 0.6, 0.24),
+    ]
+    const trim: Box[] = [[cx, H - 0.35, z, x1 - x0, 0.7, z1 - z0], [cx, H + STOREY + 0.15, z, d + 0.8, 0.3, w + 0.8], ...corbels]
+    return { windows, wall, trim, corners: [[x0, z0], [x1, z0], [x0, z1], [x1, z1]] }
+  }, [x, z, w, d, n, s, cx, H, level, above])
+  return (
+    <>
+      <mesh position={[cx, H / 2, z]}>
+        <boxGeometry args={[d, H, w]} />
+        {[across, across, along, along, along, along].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
+      </mesh>
+      <Boxes boxes={parts.windows} tex={tex.arch} cut />
+      <Boxes boxes={parts.trim} tex={tex.trim} />
+      <Boxes boxes={parts.wall} tex={tex.wall} repeat={[0.5, 0.3]} />
+      <mesh position={[cx, H + STOREY / 2, z]}>
+        <boxGeometry args={[d, STOREY, w]} />
+        {[roomAcross, roomAcross, roomAlong, roomAlong, roomAlong, roomAlong].map((m, i) => <meshBasicMaterial key={i} attach={`material-${i}`} map={m} />)}
+      </mesh>
+      <group position={[cx, 0, z]}>
+        <Spire y={H + STOREY + 0.3} r={1} h={10} n={4} scale={[(d + 1) / Math.SQRT2, (w + 1) / Math.SQRT2]} tex={tex.roof} />
+        <group position-y={H + STOREY + 9.6} scale={0.6}><Flag at={{ x: 0, z: 0 }} tex={tex.flag} /></group>
+      </group>
+      {parts.corners.map(([bx, bz]) => (
+        <group key={`${bx},${bz}`} position={[bx, H, bz]}>
+          <mesh position-y={-0.6} rotation-x={Math.PI}><coneGeometry args={[0.8, 1.2, 10]} /><meshBasicMaterial map={tex.trim} /></mesh>
+          <mesh position-y={1.2}><cylinderGeometry args={[0.8, 0.8, 2.4, 10, 1, true]} /><meshBasicMaterial map={tex.wall} /></mesh>
+          <Spire y={2.4} r={1.05} h={2.6} n={10} tex={tex.roof} />
+        </group>
+      ))}
+    </>
   )
 }
 
@@ -1093,7 +1263,8 @@ function ExhibitView({ ex, slot, quiet }: { ex: Exhibit; slot: Slot; quiet: bool
   return (
     <group position={[slot.x, 0, slot.z]} rotation-y={slot.rot} userData={{ ex }}>
       {ex.kind === 'photo' ? <Photo ex={ex} /> : ex.kind === 'note' ? <Note text={ex.text} /> : <Media ex={ex} quiet={quiet} />}
-      {ex.caption && <Text position={[0, 0.72, 0.01]} fontSize={0.14} maxWidth={MAX_W} textAlign="center" {...TITLE} color="#eee">{ex.caption}</Text>}
+      {/* hung by its top just under the tallest frame (its foot at 0.86), so a long caption runs down, not into it */}
+      {ex.caption && <Text position={[0, 0.78, 0.01]} anchorY="top" fontSize={0.14} maxWidth={MAX_W} textAlign="center" {...TITLE} color="#eee">{ex.caption}</Text>}
     </group>
   )
 }
