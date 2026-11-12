@@ -4,12 +4,14 @@ import { PointerLockControls, Text, useTexture } from '@react-three/drei'
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import {
-  buildBuilding, buildTop, keepLevel, keepLift, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TABLE, TILE, TORII, WALL_H,
+  buildBuilding, buildTop, keepLevel, keepLift, liftDoor, liftShaft, noise, solidAt, tileAt, CORE, OUTDOOR, CORE_ART, CORE_X0, CORE_Z0, DOOR_H, LIFTS, SPAWN, TABLE, TILE, TORII, WALL_H,
   type Layout, type Prop, type Slot,
 } from './layout'
+import { LIVE_URL } from './config'
 import { fileUrl, floorColor, isLockOpen, isUnlocked, lockRoom, relock, type Exhibit, type Floor, type Lock, type Museum } from './api'
 import { ashlar, books, cantera, ceiling, checker, cloth, hedge, limestone, pennant, planks, railing, slate, spots, whiteBrick } from './textures'
 import core from './core.json'
+import { Automap } from './Automap'
 
 const EYE = 1.6
 const GOLD = '#ffcc33'
@@ -67,12 +69,12 @@ type Props = {
   onFloor: (k: number) => void; onElevator: (on: boolean) => void; onPick: (ex: Exhibit | null) => void
   onTower: (where: '' | 'car' | 'top') => void // riding the keep's elevator, or up in its secret office
   onLock: (locked: boolean) => void; onChanged: () => void; onChat: (m: Chat) => void; say: RefObject<(text: string) => void>
-  onAct: (a: Act | null) => void
+  onAct: (a: Act | null) => void; map: RefObject<HTMLCanvasElement | null>; bigMap: boolean
 }
 export type Chat = { id: number; n: string; chat: string }
 
 // the whole building in one scene; `floor` is where you stand, kept in sync both ways with stairs and elevator
-export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, onElevator, onTower, onPick, onAct, onLock, onChanged, onChat, say }: Props) {
+export function MuseumView({ museum, floor, token, quiet, view, fps, map, bigMap, onFloor, onElevator, onTower, onPick, onAct, onLock, onChanged, onChat, say }: Props) {
   const byRoom = Map.groupBy(museum.exhibits, (e) => e.room)
   const floors = museum.floors.map((f: Floor) => museum.rooms.filter((r) => r.floor === f.id)
     .map((r) => ({ id: r.id, title: r.title, locked: r.locked, count: r.count ?? byRoom.get(r.id)?.length ?? 0 })))
@@ -97,6 +99,7 @@ export function MuseumView({ museum, floor, token, quiet, view, fps, onFloor, on
       <Player layouts={layouts} summit={summit} lockOpen={lockOpen} floor={floor} view={view} onFloor={onFloor} onElevator={onElevator}
         onTower={onTower} onPick={onPick} onAct={onAct} />
       <Fps el={fps} />
+      <Automap el={map} layouts={layouts} floor={floor} big={bigMap} />
       <PointerLockControls selector="#lock" onLock={() => onLock(true)} onUnlock={() => onLock(false)} />
     </Canvas>
   )
@@ -218,7 +221,6 @@ function withWindow(tex: THREE.Texture | null, arched = false) {
 type Cell = [number, number, number] // tile x, tile z, height of the floor it belongs to
 type Box = [number, number, number, number, number, number] // center x, y, z and size x, y, z
 type Slant = [number, number, string] // tile x, tile z, '\' or '/'
-const OUTDOOR = 'osgpT' // tiles under the open sky
 
 // The structure of every floor is batched by kind into a few instanced meshes, so 3 floors or 99 cost about the
 // same draw calls. Exhibits, signs and media, the heavy part, exist only for your floor and the ones next to it.
@@ -1766,7 +1768,6 @@ function Player({ layouts, summit, lockOpen, floor, view, onFloor, onElevator, o
 // ---- other visitors ----
 
 type Peer = { n: string; f: string; x: number; z: number; y: number; h: number; t: number }
-const LIVE = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 // Freedoom marine: frames a-d (walk cycle) x rotations 1-5; 6-8 are 4-2 mirrored
 const SPRITES = [...'abcd'].flatMap((f) => [`${f}1`, `${f}2${f}8`, `${f}3${f}7`, `${f}4${f}6`, `${f}5`].map((r) => `/doom/play${r}.png`))
 const PX = 1.8 / 56 // sprite pixels to meters: the marine is 56px tall
@@ -1786,7 +1787,7 @@ function Avatars({ floorId, token, onChanged, onChat, say }: Pick<Props, 'token'
       setIds((prev) => (prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next))
     }
     const connect = () => {
-      sock = ws.current = new WebSocket(LIVE)
+      sock = ws.current = new WebSocket(LIVE_URL)
       say.current = (text) => { if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ chat: text })) }
       sock.onopen = () => {
         sock.send(JSON.stringify({ token }))

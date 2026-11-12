@@ -5,3 +5,7 @@ server/uploads
 server/.secret
 __pycache__
 .DS_Store
+server/.env
+client/.env
+client/.env.*.local
+client/.env.local

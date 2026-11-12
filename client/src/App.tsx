@@ -1,26 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fileUrl, getToken, logout, unlockLock, unlockRoom, useMuseum, useUser, type Exhibit, type Lock, type Museum, type User } from './api'
+import { fileUrl, getToken, KIND, logout, unlockLock, unlockRoom, useMuseum, useUser, type Exhibit, type Lock, type Museum, type User } from './api'
 import { MuseumView, openRoomDoor, VIEWS, type Act, type Chat, type View } from './Museum'
 import { Keypad } from './Keypad'
 import { Admin } from './Admin'
 import { AuthForm } from './Auth'
+import { Home } from './Home'
 
+if (location.hash === '#admin') location.replace('/admin') // the panel's old address
+
+// each page is its own address and a plain link between them reloads the page: the game starts fresh every time
 export default function App() {
-  const [hash, setHash] = useState(location.hash)
-  useEffect(() => {
-    const onHash = () => setHash(location.hash)
-    addEventListener('hashchange', onHash)
-    return () => removeEventListener('hashchange', onHash)
-  }, [])
   const user = useUser()
   const { data, error, reload } = useMuseum()
+  const path = location.pathname.replace(/\/+$/, '')
   if (!data) return <p className="center">{error ? `No se pudo conectar: ${error}` : 'Cargando…'}</p>
-  return hash === '#admin'
-    ? <Admin museum={data} user={user} reload={reload} />
-    : <Visit museum={data} user={user} reload={reload} />
+  if (path === '/play') return <Visit museum={data} user={user} reload={reload} />
+  if (path === '/admin') return <Admin museum={data} user={user} reload={reload} />
+  return <Home museum={data} user={user} />
 }
 
-const KIND = { photo: 'Foto', video: 'Video', audio: 'Música', note: 'Nota' }
 let lineKey = 0
 
 // a setting remembered in this browser; if storage is blocked (private mode) it just isn't remembered
@@ -45,7 +43,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
   const [chat, setChat] = useState<(Chat & { key: number })[]>([])
   const [saved, setView] = useSaved('view', 'media'), [fps, setFps] = useSaved('fps', 'no')
   const view: View = saved in VIEWS ? (saved as View) : 'media'
-  const fpsEl = useRef<HTMLDivElement>(null)
+  const [bigMap, setBigMap] = useState(false)
+  const fpsEl = useRef<HTMLDivElement>(null), mapEl = useRef<HTMLCanvasElement>(null)
   const say = useRef<(text: string) => void>(() => {})
   const onChat = useCallback((m: Chat) => setChat((c) => [...c.slice(-7), { ...m, key: ++lineKey }]), [])
   const floors = museum.floors
@@ -68,6 +67,8 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
       if (e.code === 'KeyE' && (act?.kind === 'pin' || act?.kind === 'lock')) { setTyping(act); document.exitPointerLock() }
       if (e.code === 'KeyE' && act?.kind === 'exit') openRoomDoor(act.room)
       if (e.code === 'KeyT' && user) { e.preventDefault(); setTalking(true) } // T talks, like in DOOM
+      // and Tab opens the map; with the mouse free it still moves the focus
+      if (e.code === 'Tab' && document.pointerLockElement) { e.preventDefault(); setBigMap((b) => !b) }
       if (!elevator) return
       const n = Number(e.key), go = (k: number) => setFloorIdx(Math.max(0, Math.min(floors.length - 1, k)))
       if (n >= 1 && n <= 9) go(n - 1)
@@ -82,16 +83,16 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
     return () => { removeEventListener('keydown', onKey); removeEventListener('keyup', onUp) }
   }, [picked, act, viewing, typing, elevator, floors.length, current, user])
 
-  if (!floor) return <p className="center">El museo está vacío. <a href="#admin">Crea el primer piso en el panel</a></p>
+  if (!floor) return <p className="center">El museo está vacío. <a href="/admin">Crea el primer piso en el panel</a></p>
   return (
     <>
-      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} onFloor={setFloorIdx}
+      <MuseumView museum={museum} floor={current} token={user ? getToken() : ''} quiet={!!viewing} view={view} fps={fpsEl} map={mapEl} bigMap={bigMap} onFloor={setFloorIdx}
         onElevator={setElevator} onTower={setTower} onPick={setPicked} onAct={setAct} onLock={setLocked} onChanged={reload} onChat={onChat} say={say} />
       <div className="hud">
         <div className="top">
           <span>ARCHIVUM · {tower === 'top' ? 'Oficina secreta, en lo alto de la torre' : `${floor.name} (${current + 1}/${floors.length})`}</span>
           {user
-            ? <span>{user.name} · <a href="#admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
+            ? <span>{user.name} · <a href="/">Inicio</a> · <a href="/admin">Panel</a> · <button className="link" onClick={logout}>Salir</button></span>
             : <button onClick={() => setLogin(true)}>Entrar / Registrarse</button>}
         </div>
         <div className={talking ? 'chat open' : 'chat'} aria-live="polite">
@@ -108,6 +109,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
             </form>
           )}
         </div>
+        <canvas className={bigMap ? 'automap big' : 'automap'} ref={mapEl} aria-label="Mapa" />
         {fps === 'sí' && <div className="fps" ref={fpsEl} />}
         {locked && <div className="crosshair">+</div>}
         <div className="bottom">
@@ -130,7 +132,7 @@ function Visit({ museum, user, reload }: { museum: Museum; user: User | null; re
           <div>
             <h1>ARCHIVUM</h1>
             <p>Click para entrar</p>
-            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · Espacio: saltar · E: ver de cerca · T: chatear · Esc: salir</p>
+            <p>WASD / flechas: moverse · mouse: mirar · Shift: correr · Espacio: saltar · E: ver de cerca · T: chatear · Tab: mapa · Esc: salir</p>
           </div>
         </div>
       )}

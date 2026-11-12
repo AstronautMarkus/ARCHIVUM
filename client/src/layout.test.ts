@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildBuilding, buildFloor, buildTop, keepLift, liftDoor, liftShaft, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
+  buildBuilding, buildFloor, buildTop, keepLift, liftDoor, liftShaft, placeAt, solidAt, tileAt, trunk, COLUMN, CORE, CORE_ART, CORE_X0, CORE_Z0, KEEP, LIFTS, SOLID, SPAWN, TILE, TORII,
 } from './layout.ts'
 
 const rooms = (counts: number[]) => counts.map((count, i) => ({ id: `r${i}`, title: `Sala ${i}`, count }))
@@ -233,4 +233,20 @@ test('the secret office: the keep\'s elevator comes up into a lobby, walled off 
   for (const [x, z] of [door.desk, door.globe]) assert.ok(solidAt(top, x, z))
   for (let z = n0; z <= s1; z += 0.25) for (const dx of [-0.2, 0, 0.2]) assert.ok(!solidAt(top, w0 + 0.15 + dx, z))
   for (const [x, z] of [[k.x - TILE - 1, k.z], [k.x + k.d + TILE + 1, k.z - k.w / 2 - 1], [k.x, k.z + k.w / 2 + TILE + 1]]) assert.ok(solidAt(top, x, z))
+})
+
+test('the map names where you stand: each room inside its walls, and the places around them', () => {
+  const l = buildFloor(rooms([3, 12]), { ground: true })
+  for (const r of l.rooms) {
+    const { x0, x1, z0, z1 } = r.area
+    for (let tx = x0; tx <= x1; tx++) for (let tz = z0; tz <= z1; tz++) {
+      assert.equal(tileAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), '.')
+      assert.equal(placeAt(l, (tx + 0.5) * TILE, (tz + 0.5) * TILE), r.title)
+    }
+    // the doorway is still the corridor
+    assert.notEqual(placeAt(l, (r.door.tx + 0.5) * TILE, (r.door.tz + 0.5) * TILE), r.title)
+  }
+  assert.equal(placeAt(l, SPAWN.x, SPAWN.z), 'Lobby')
+  assert.equal(placeAt(l, l.court!.fountain.x - TILE * 2.5, l.court!.fountain.z - TILE * 1.5), 'Patio')
+  assert.equal(placeAt(l, l.start.x, l.start.z), 'Exterior')
 })
